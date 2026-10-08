@@ -368,7 +368,9 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         val text = when {
             problem != null -> problem
             fb == Hub.Fb.IDLE && listening -> "Klar – hold en bog mod telefonen"
-            fb == Hub.Fb.IDLE -> "Cicero lytter ikke – aktiver RFID"
+            // Mange Cicero-sider har ikke RFID, så her skal ikke stå en opfordring.
+            // "Aktiver RFID" vises kun, når man faktisk holder en bog mod telefonen.
+            fb == Hub.Fb.IDLE -> "Cicero NFC"
             else -> Hub.statusText
         }
         val bg = when {
