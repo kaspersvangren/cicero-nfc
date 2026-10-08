@@ -321,6 +321,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             useWideViewPort = true
             // Ciceros kamerascanning skal kunne vise kamerabilledet uden ekstra tryk
             mediaPlaybackRequiresUserGesture = false
+            // Pinch-zoom som i Chrome, uden de gamle +/- knapper
+            setSupportZoom(true)
+            builtInZoomControls = true
+            displayZoomControls = false
             // Ser ud som almindelig Chrome, ikke som en indlejret browser
             userAgentString = userAgentString.replace("; wv", "")
         }
