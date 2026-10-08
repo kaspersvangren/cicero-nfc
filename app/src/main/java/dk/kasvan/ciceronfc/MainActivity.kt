@@ -282,17 +282,36 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         m.menu.add(0, 1, 0, if (logScroll.visibility == View.VISIBLE) "Skjul log" else "Vis log")
         m.menu.add(0, 2, 1, "Del log")
         m.menu.add(0, 3, 2, "Genindlæs Cicero")
-        m.menu.add(0, 4, 3, "Om Cicero NFC")
+        m.menu.add(0, 5, 3, "Tekststørrelse")
+        m.menu.add(0, 4, 4, "Om Cicero NFC")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> toggleLog()
                 2 -> shareLog()
                 3 -> web.reload()
                 4 -> showAbout()
+                5 -> chooseTextSize()
             }
             true
         }
         m.show()
+    }
+
+    private val textSizes = intArrayOf(90, 100, 115, 130)
+    private val textSizeNames = arrayOf("Lille", "Normal", "Stor", "Større")
+
+    /** Teksten i Cicero bliver større og linjerne brydes om; ikoner bevarer størrelsen. */
+    private fun chooseTextSize() {
+        val current = web.settings.textZoom
+        val idx = textSizes.indexOf(current).let { if (it < 0) 1 else it }
+        AlertDialog.Builder(this)
+            .setTitle("Tekststørrelse")
+            .setSingleChoiceItems(textSizeNames, idx) { d, which ->
+                web.settings.textZoom = textSizes[which]
+                getSharedPreferences("ui", MODE_PRIVATE).edit().putInt("textZoom", textSizes[which]).apply()
+                d.dismiss()
+            }
+            .show()
     }
 
     private fun showAbout() {
@@ -321,6 +340,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             useWideViewPort = true
             // Ciceros kamerascanning skal kunne vise kamerabilledet uden ekstra tryk
             mediaPlaybackRequiresUserGesture = false
+            textZoom = getSharedPreferences("ui", MODE_PRIVATE).getInt("textZoom", 100)
             // Pinch-zoom som i Chrome, uden de gamle +/- knapper
             setSupportZoom(true)
             builtInZoomControls = true
