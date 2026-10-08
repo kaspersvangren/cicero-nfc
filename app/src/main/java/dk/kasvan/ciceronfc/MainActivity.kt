@@ -19,6 +19,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -31,6 +32,9 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
     private lateinit var web: WebView
     private lateinit var status: TextView
+    private lateinit var bar: LinearLayout
+    private lateinit var flash: View
+    private var lastSeq = -1
     private lateinit var logScroll: ScrollView
     private lateinit var logView: TextView
     private var nfc: NfcAdapter? = null
@@ -59,7 +63,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private fun buildLayout() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        val bar = LinearLayout(this).apply {
+        bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.parseColor("#1E2A38"))
@@ -78,6 +82,12 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         bar.addView(barButton("↻") { web.reload() })
 
         web = WebView(this)
+        // Farvet blink hen over Cicero ved færdig/fejl. Ikke klikbar, så tryk går igennem.
+        flash = View(this).apply { alpha = 0f }
+        val webBox = FrameLayout(this).apply {
+            addView(web, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(flash, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        }
 
         logView = TextView(this).apply {
             typeface = Typeface.MONOSPACE
@@ -93,7 +103,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         }
 
         root.addView(bar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        root.addView(web, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(webBox, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(
             logScroll,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.4).toInt()),
@@ -122,7 +132,9 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 val url = request.url.toString()
-                if (request.isForMainFrame || url.contains(":${Server.PORT}")) {
+                // Når Cicero selv lukker /events/ ved skærmskift, melder browseren ERR_FAILED – det er ikke en fejl
+                val closedEvents = url.contains("/events") && (error.description?.contains("ERR_FAILED") == true)
+                if (!closedEvents && (request.isForMainFrame || url.contains(":${Server.PORT}"))) {
                     LogBuf.add("Browser-fejl: ${error.description} ($url)")
                 }
             }
@@ -174,12 +186,37 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
     private fun refreshStatus() {
         val n = nfc
-        status.text = when {
+        val problem = when {
             n == null -> "Denne telefon har ingen NFC"
             !n.isEnabled -> "NFC er slået fra – tryk her for at slå det til"
             !Server.listening -> "Starter…"
-            else -> Hub.statusText
+            else -> null
         }
+        if (problem != null) {
+            status.text = problem
+            bar.setBackgroundColor(Color.parseColor("#C53030"))
+            return
+        }
+        status.text = Hub.statusText
+        val fb = Hub.feedback
+        bar.setBackgroundColor(Color.parseColor(colorFor(fb)))
+        val seq = Hub.feedbackSeq
+        if (seq != lastSeq) {
+            lastSeq = seq
+            if (fb == Hub.Fb.DONE || fb == Hub.Fb.ERROR) {
+                flash.setBackgroundColor(Color.parseColor(colorFor(fb)))
+                flash.animate().cancel()
+                flash.alpha = 0.45f
+                flash.animate().alpha(0f).setStartDelay(350).setDuration(700).start()
+            }
+        }
+    }
+
+    private fun colorFor(fb: Hub.Fb) = when (fb) {
+        Hub.Fb.IDLE -> "#1E2A38"
+        Hub.Fb.READ -> "#B7791F"
+        Hub.Fb.DONE -> "#2F855A"
+        Hub.Fb.ERROR -> "#C53030"
     }
 
     private fun openNfcSettingsIfOff() {

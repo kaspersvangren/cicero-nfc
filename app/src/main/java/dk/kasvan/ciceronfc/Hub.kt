@@ -2,9 +2,15 @@ package dk.kasvan.ciceronfc
 
 import android.content.Context
 import android.nfc.Tag
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Build
 import android.os.SystemClock
+import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.os.VibratorManager
 import org.json.JSONObject
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
@@ -55,6 +61,15 @@ object Hub {
     @Volatile var mode = "IDLE"
     @Volatile var statusText = "Klar – hold en bog mod telefonen"
         private set
+
+    /** Hvad brugeren skal se/høre/mærke lige nu. */
+    enum class Fb { IDLE, READ, DONE, ERROR }
+
+    @Volatile var feedback = Fb.IDLE
+        private set
+    @Volatile var feedbackSeq = 0
+        private set
+    private var toneGen: ToneGenerator? = null
     @Volatile var statusListener: (() -> Unit)? = null
 
     private val counters = linkedMapOf(
@@ -73,8 +88,22 @@ object Hub {
         LogBuf.add("Cicero NFC ${BuildConfigInfo.version(ctx)} startet")
     }
 
-    private fun setStatus(s: String) {
-        statusText = s
+    private fun signal(fb: Fb, text: String) {
+        feedback = fb
+        feedbackSeq++
+        statusText = text
+        when (fb) {
+            Fb.READ -> buzz(longArrayOf(0, 30))
+            Fb.DONE -> {
+                buzz(longArrayOf(0, 120, 90, 120))
+                tone(ToneGenerator.TONE_PROP_ACK, 300)
+            }
+            Fb.ERROR -> {
+                buzz(longArrayOf(0, 700))
+                tone(ToneGenerator.TONE_SUP_ERROR, 700)
+            }
+            Fb.IDLE -> {}
+        }
         statusListener?.invoke()
     }
 
@@ -120,10 +149,8 @@ object Hub {
         current = state
         pingFails = 0
         Server.broadcast("addTag", state.toJson().toString())
-        vibrate(40)
-        val msg = "Læst: ${state.label()} · alarm ${afiText(state.afi)}"
-        LogBuf.add(msg)
-        setStatus(msg)
+        LogBuf.add("Læst: ${state.label()} · alarm ${afiText(state.afi)}")
+        signal(Fb.READ, "Læst: ${state.label()} (${afiText(state.afi)}) – hold stille…")
     }
 
     private fun presenceCheck() {
@@ -143,7 +170,7 @@ object Hub {
         s.phone.close()
         Server.broadcast("removeTag", s.toJson().toString())
         LogBuf.add("Væk: ${s.label()} ($why)")
-        setStatus("Klar – hold en bog mod telefonen")
+        if (feedback != Fb.ERROR) signal(Fb.IDLE, "Klar – hold en bog mod telefonen")
     }
 
     // ---------- Det Cicero kalder (via Server) ----------
@@ -185,7 +212,7 @@ object Hub {
         val word = if (on) "TIL (sikret)" else "FRA (udlånt)"
         if (inventory.isEmpty()) {
             LogBuf.add("Alarm $word: ingen bog ved telefonen")
-            setStatus("⚠ Hold bogen mod telefonen til den summer")
+            signal(Fb.ERROR, "⚠ Bogen blev fjernet for tidligt – alarmen er IKKE skiftet")
             return@onExec Result(400, "Inventory empty")
         }
         for (s in inventory.values) {
@@ -196,14 +223,13 @@ object Hub {
             } catch (e: Exception) {
                 count("WriteAFIFail")
                 LogBuf.add("Alarm $word FEJLEDE på ${s.label()}: ${e.message}")
-                setStatus("⚠ Alarm kunne ikke skrives – prøv igen")
+                signal(Fb.ERROR, "⚠ Alarmen kunne ikke skrives – hold bogen mod telefonen igen")
                 return@onExec Result(500, "Failed activating alarm on id ${s.mac}, err: ${e.message} ")
             }
         }
-        vibrate(250)
         val names = inventory.values.joinToString { it.label() }
         LogBuf.add("Alarm $word: $names")
-        setStatus("✓ Alarm $word: $names")
+        signal(Fb.DONE, "✓ Alarm ${if (on) "slået TIL" else "slået FRA"}: $names – fjern bogen")
         Result(200, "OK")
     }
 
@@ -217,12 +243,12 @@ object Hub {
                 writeContent(s, barcode, numItems = n, seqNum = i)
             } catch (e: Exception) {
                 LogBuf.add("Skriv $barcode FEJLEDE: ${e.message}")
+                signal(Fb.ERROR, "⚠ Kunne ikke skrive $barcode – prøv igen")
                 return@onExec Result(400, "Error writing inventory: ${e.message}")
             }
         }
-        vibrate(250)
         LogBuf.add("Skrevet: $barcode til $n tag(s)")
-        setStatus("✓ Skrevet: $barcode")
+        signal(Fb.DONE, "✓ Skrevet: $barcode – fjern bogen")
         Result(200, inventoryJsonLocal(), json = true)
     }
 
@@ -238,11 +264,11 @@ object Hub {
             )
         } catch (e: Exception) {
             LogBuf.add("Skriv $barcode FEJLEDE: ${e.message}")
+            signal(Fb.ERROR, "⚠ Kunne ikke skrive $barcode – prøv igen")
             return@onExec Result(400, "Error writing tag: ${e.message}")
         }
-        vibrate(250)
         LogBuf.add("Skrevet: $barcode til ${s.mac}")
-        setStatus("✓ Skrevet: $barcode")
+        signal(Fb.DONE, "✓ Skrevet: $barcode – fjern bogen")
         Result(200, s.toJson().toString(), json = true)
     }
 
@@ -283,12 +309,35 @@ object Hub {
         return sb.toString()
     }
 
-    private fun vibrate(ms: Long) {
+    // Vibration mærket som "alarm", så den også kommer igennem i lydløs tilstand
+    @Suppress("DEPRECATION")
+    private fun buzz(pattern: LongArray) {
         try {
-            @Suppress("DEPRECATION")
-            val v = ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
-        } catch (_: Exception) {}
+            val v: Vibrator = if (Build.VERSION.SDK_INT >= 31) {
+                ctx.getSystemService(VibratorManager::class.java).defaultVibrator
+            } else {
+                ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+            val effect = VibrationEffect.createWaveform(pattern, -1)
+            if (Build.VERSION.SDK_INT >= 33) {
+                v.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
+            } else {
+                v.vibrate(effect, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build())
+            }
+        } catch (e: Exception) {
+            LogBuf.add("Vibration fejlede: ${e.message}")
+        }
+    }
+
+    // Bip via medie-lydstyrken (ikke ringelyden, som er slukket i lydløs tilstand)
+    private fun tone(type: Int, ms: Int) {
+        try {
+            if (toneGen == null) toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
+            toneGen?.startTone(type, ms)
+        } catch (e: Exception) {
+            toneGen = null
+            LogBuf.add("Bip fejlede: ${e.message}")
+        }
     }
 }
 
