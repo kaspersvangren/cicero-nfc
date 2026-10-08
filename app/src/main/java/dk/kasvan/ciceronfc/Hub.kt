@@ -96,17 +96,17 @@ object Hub {
         statusText = text
         statusDetail = detail
         when (fb) {
-            // Læst: kort tik (50 ms) i fuld styrke
-            Fb.READ -> buzz(longArrayOf(0, 50), intArrayOf(0, 255))
-            // Alarm fra: to stigende bip + dobbelt-vibration
+            // Læst: kort tik (70 ms) i fuld styrke
+            Fb.READ -> buzz(longArrayOf(0, 70), intArrayOf(0, 255))
+            // Alarm fra: "ka-pling" op (A4 → E5) + dobbelt-vibration
             Fb.ALARM_OFF -> {
                 buzz(longArrayOf(0, 110, 80, 110))
-                Beeper.play(880 to 90, 0 to 40, 1320 to 140)
+                Beeper.chime(Beeper.Note(0, 440.0, 380), Beeper.Note(110, 659.3, 650))
             }
-            // Alarm til: ét dybt bip + én lang vibration
+            // Alarm til: samme "ka-pling", bare ned (E5 → A4) + én lang vibration
             Fb.ALARM_ON -> {
                 buzz(longArrayOf(0, 450))
-                Beeper.play(440 to 260)
+                Beeper.chime(Beeper.Note(0, 659.3, 380), Beeper.Note(110, 440.0, 650))
             }
             Fb.WRITTEN -> {
                 buzz(longArrayOf(0, 110, 80, 110))

@@ -15,6 +15,65 @@ import kotlin.math.sin
 object Beeper {
     private const val RATE = 44_100
 
+    class Note(val atMs: Int, val freq: Double, val ms: Int)
+
+    /**
+     * Klokkeagtigt "ka-pling": hver tone har et hurtigt anslag og klinger ud,
+     * med svage overtoner, så det lyder som en lille klokke frem for et bip.
+     * Toner må overlappe, så den første stadig klinger, når den næste slår an.
+     */
+    fun chime(vararg notes: Note) {
+        thread(isDaemon = true) {
+            try {
+                val totalMs = notes.maxOf { it.atMs + it.ms }
+                val mix = DoubleArray(totalMs * RATE / 1000)
+                for (n in notes) {
+                    val start = n.atMs * RATE / 1000
+                    val len = n.ms * RATE / 1000
+                    val attack = RATE / 250 // 4 ms
+                    val tau = len / 4.0
+                    for (i in 0 until len) {
+                        if (start + i >= mix.size) break
+                        val t = i.toDouble() / RATE
+                        val env = (if (i < attack) i.toDouble() / attack else 1.0) * kotlin.math.exp(-i / tau)
+                        val w = 2 * PI * n.freq * t
+                        val v = sin(w) + 0.35 * sin(2 * w) + 0.12 * sin(3 * w) + 0.05 * sin(4.2 * w)
+                        mix[start + i] += v * env
+                    }
+                }
+                val peak = mix.maxOf { kotlin.math.abs(it) }.coerceAtLeast(1e-9)
+                val pcm = ShortArray(mix.size) { (mix[it] / peak * 0.7 * Short.MAX_VALUE).toInt().toShort() }
+                playPcm(pcm, totalMs)
+            } catch (e: Exception) {
+                LogBuf.add("Lyd fejlede: ${e.message}")
+            }
+        }
+    }
+
+    private fun playPcm(pcm: ShortArray, totalMs: Int) {
+        val track = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build(),
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(RATE)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build(),
+            )
+            .setTransferMode(AudioTrack.MODE_STATIC)
+            .setBufferSizeInBytes(pcm.size * 2)
+            .build()
+        track.write(pcm, 0, pcm.size)
+        track.play()
+        Thread.sleep(totalMs.toLong() + 150)
+        track.release()
+    }
+
     /** Par af (frekvens i Hz, varighed i ms). Frekvens 0 = pause. */
     fun play(vararg tones: Pair<Int, Int>) {
         thread(isDaemon = true) {
