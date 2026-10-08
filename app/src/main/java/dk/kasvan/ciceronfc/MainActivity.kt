@@ -12,6 +12,8 @@ import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.text.TextUtils
 import android.view.Gravity
@@ -73,6 +75,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private lateinit var flash: View
     private lateinit var logScroll: ScrollView
     private lateinit var logView: TextView
+    private lateinit var root: LinearLayout
+    private lateinit var divider: View
+    private val handler = Handler(Looper.getMainLooper())
+    private var resumed = false
     private var nfc: NfcAdapter? = null
     private var lastSeq = -1
 
@@ -81,7 +87,12 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         Hub.start(applicationContext)
         nfc = NfcAdapter.getDefaultAdapter(this)
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-        pal = if (night) darkPalette else lightPalette
+        val saved = getSharedPreferences("ui", MODE_PRIVATE).getString("ciceroTheme", null)
+        pal = when (saved) {
+            "dark" -> darkPalette
+            "light" -> lightPalette
+            else -> if (night) darkPalette else lightPalette
+        }
         // Skærmen slukker ikke, mens app'en er åben ved skranken
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         buildLayout()
@@ -94,10 +105,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun buildLayout() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(pal.logBg)
-        }
+        root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -136,8 +144,6 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
-            progressTintList = ColorStateList.valueOf(pal.blue)
-            progressBackgroundTintList = ColorStateList.valueOf(pal.line)
             visibility = View.GONE
         }
 
@@ -152,16 +158,14 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         logView = TextView(this).apply {
             typeface = Typeface.MONOSPACE
             textSize = 11f
-            setTextColor(pal.logText)
             setPadding(dp(10), dp(8), dp(10), dp(8))
             setTextIsSelectable(true)
         }
         logScroll = ScrollView(this).apply {
-            setBackgroundColor(pal.logBg)
             visibility = View.GONE
             addView(logView)
         }
-        val divider = View(this).apply { setBackgroundColor(pal.line) }
+        divider = View(this)
 
         root.addView(bar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         root.addView(progress, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(3)))
@@ -172,6 +176,62 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.4).toInt()),
         )
         setContentView(root)
+        applyPalette()
+    }
+
+    private fun applyPalette() {
+        root.setBackgroundColor(pal.logBg)
+        progress.progressTintList = ColorStateList.valueOf(pal.blue)
+        progress.progressBackgroundTintList = ColorStateList.valueOf(pal.line)
+        logView.setTextColor(pal.logText)
+        logScroll.setBackgroundColor(pal.logBg)
+        divider.setBackgroundColor(pal.line)
+        refreshStatus()
+    }
+
+    /**
+     * Cicero har sin egen mørke tilstand (Udseende), uafhængig af telefonens.
+     * Vi aflæser farven øverst på Cicero-siden og følger den.
+     */
+    private val themeProbe = """
+        (function () {
+          function bg(e) {
+            while (e) {
+              var c = getComputedStyle(e).backgroundColor;
+              var m = c && c.match(/[\d.]+/g);
+              if (m && !(m.length > 3 && +m[3] === 0)) return 0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2];
+              e = e.parentElement;
+            }
+            return -1;
+          }
+          var l = bg(document.elementFromPoint(window.innerWidth / 2, 4));
+          if (l < 0) l = bg(document.body);
+          return l < 0 ? 'unknown' : (l < 128 ? 'dark' : 'light');
+        })()
+    """.trimIndent()
+
+    private fun detectCiceroTheme() {
+        web.evaluateJavascript(themeProbe) { result ->
+            val theme = result?.trim('"') ?: return@evaluateJavascript
+            val newPal = when (theme) {
+                "dark" -> darkPalette
+                "light" -> lightPalette
+                else -> return@evaluateJavascript
+            }
+            if (newPal !== pal) {
+                pal = newPal
+                getSharedPreferences("ui", MODE_PRIVATE).edit().putString("ciceroTheme", theme).apply()
+                applyPalette()
+            }
+        }
+    }
+
+    private val themeTicker = object : Runnable {
+        override fun run() {
+            if (!resumed) return
+            detectCiceroTheme()
+            handler.postDelayed(this, 3000)
+        }
     }
 
     private fun showMenu(anchor: View) {
@@ -225,6 +285,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = false
 
+            override fun onPageFinished(view: WebView, url: String) {
+                handler.postDelayed({ detectCiceroTheme() }, 500)
+            }
+
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 val url = request.url.toString()
                 // Når Cicero selv lukker /events/ ved skærmskift, melder browseren ERR_FAILED – det er ikke en fejl
@@ -267,10 +331,15 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             opts,
         )
         refreshStatus()
+        resumed = true
+        handler.removeCallbacks(themeTicker)
+        handler.postDelayed(themeTicker, 1500)
     }
 
     override fun onPause() {
         super.onPause()
+        resumed = false
+        handler.removeCallbacks(themeTicker)
         nfc?.disableReaderMode(this)
         CookieManager.getInstance().flush()
     }
