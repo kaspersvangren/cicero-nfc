@@ -25,6 +25,17 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Hent signeringsnøgle fra GitHubs hemmelige boks
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "Hemmeligheden KEYSTORE_B64 mangler under Settings → Secrets and variables → Actions" | tee build.log
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > app/release.keystore
+
       - name: Byg APK
         shell: bash
         env:
