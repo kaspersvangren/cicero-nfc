@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -372,6 +373,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             override fun onPermissionRequestCanceled(request: PermissionRequest) {
                 if (pendingCamera === request) pendingCamera = null
             }
+
+            // Android viser ellers en stor grå afspil-knap, mens kameraet starter/skifter.
+            // En ensfarvet flade i Ciceros farve kan ikke forvrænges, når den strækkes.
+            override fun getDefaultVideoPoster(): Bitmap =
+                Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888).apply { eraseColor(pal.bar) }
 
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 progress.progress = newProgress
