@@ -56,6 +56,8 @@ object Server {
         }
     }
 
+    fun clientCount() = clients.size
+
     fun broadcast(event: String, data: String) {
         send("event: $event\ndata: $data\n\n")
     }
@@ -167,6 +169,7 @@ object Server {
         }
         clients += client
         LogBuf.add("Cicero forbundet til hændelser (/events/) – ${clients.size} forbindelse(r)")
+        Hub.onClientConnected()
         try {
             sock.soTimeout = 0
             while (inp.read() != -1) { /* venter til Cicero lukker */ }

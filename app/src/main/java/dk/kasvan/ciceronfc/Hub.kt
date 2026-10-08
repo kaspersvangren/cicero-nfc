@@ -149,8 +149,27 @@ object Hub {
         current = state
         pingFails = 0
         Server.broadcast("addTag", state.toJson().toString())
-        LogBuf.add("Læst: ${state.label()} · alarm ${afiText(state.afi)}")
-        signal(Fb.READ, "Læst: ${state.label()} (${afiText(state.afi)}) – hold stille…")
+        if (Server.clientCount() == 0) {
+            LogBuf.add("Læst: ${state.label()} · alarm ${afiText(state.afi)} (Cicero lytter ikke)")
+            signal(Fb.READ, "Læst: ${state.label()} – men Cicero lytter ikke. Åbn Udlån eller Aflevering og hold bogen der")
+        } else {
+            LogBuf.add("Læst: ${state.label()} · alarm ${afiText(state.afi)}")
+            signal(Fb.READ, "Læst: ${state.label()} (${afiText(state.afi)}) – hold stille…")
+        }
+    }
+
+    /**
+     * Cicero er begyndt at lytte (fx skiftet til Aflevering). En rigtig læser melder de
+     * bøger, der allerede ligger på den – det gør vi også.
+     */
+    fun onClientConnected() {
+        exec.schedule(Runnable {
+            if (inventory.isEmpty()) return@Runnable
+            for (s in inventory.values) Server.broadcast("addTag", s.toJson().toString())
+            val names = inventory.values.joinToString { it.label() }
+            LogBuf.add("Cicero lytter nu – sendt bog der allerede lå ved telefonen: $names")
+            signal(Fb.READ, "Læst: $names – hold stille…")
+        }, 200, TimeUnit.MILLISECONDS)
     }
 
     private fun presenceCheck() {
