@@ -60,8 +60,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         logBg = Color.parseColor("#2E2E2E"), logText = Color.parseColor("#E0E0E0"), line = Color.parseColor("#424242"),
         lightBar = false,
     )
-    private val amber = Color.parseColor("#B7791F")
-    private val ciceroBlue = Color.parseColor("#0078D3")
+    private val orange = Color.parseColor("#DD6B20")
+    private val gray = Color.parseColor("#718096")
     private val green = Color.parseColor("#2F855A")
     private val red = Color.parseColor("#C53030")
 
@@ -71,7 +71,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private lateinit var rfidIcon: ImageView
     private lateinit var rfidCircle: GradientDrawable
     private lateinit var status: TextView
-    private lateinit var stateIcon: ImageView
+    private lateinit var pill: LinearLayout
+    private lateinit var pillBg: GradientDrawable
+    private lateinit var pillIcon: ImageView
+    private lateinit var pillText: TextView
     private lateinit var detail: TextView
     private lateinit var menuBtn: TextView
     private lateinit var progress: ProgressBar
@@ -125,8 +128,28 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         }
         bar.addView(rfidIcon, LinearLayout.LayoutParams(dp(26), dp(26)))
 
-        stateIcon = ImageView(this).apply { visibility = View.GONE }
-        bar.addView(stateIcon, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginStart = dp(10) })
+        // Lille farvet pille med klokke: grøn = alarm fra, orange = alarm til, rød = fejl
+        pillBg = GradientDrawable().apply { cornerRadius = dp(12).toFloat() }
+        pill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = pillBg
+            setPadding(dp(8), dp(3), dp(10), dp(3))
+            visibility = View.GONE
+            setOnClickListener { openNfcSettingsIfOff() }
+        }
+        pillIcon = ImageView(this).apply { imageTintList = ColorStateList.valueOf(Color.WHITE) }
+        pill.addView(pillIcon, LinearLayout.LayoutParams(dp(15), dp(15)))
+        pillText = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(dp(5), 0, 0, 0)
+        }
+        pill.addView(pillText)
+        bar.addView(pill, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
 
         status = TextView(this).apply {
             textSize = 14f
@@ -373,72 +396,69 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         val n = nfc
         val listening = Server.clientCount() > 0
         val problem = when {
-            n == null -> "Ingen NFC på denne telefon"
-            !n.isEnabled -> "NFC er slået fra – tryk her"
-            !Server.listening -> "Starter…"
+            n == null -> "Ingen NFC"
+            !n.isEnabled -> "NFC slået fra – tryk her"
+            !Server.listening -> null
             else -> null
         }
         val fb = Hub.feedback
 
-        // Farve og symbol bærer budskabet; teksten er et eller to ord
-        var bg = pal.bar
-        var icon: Int? = null
-        val text: String
+        // Bjælken forbliver neutral; en lille farvet pille bærer budskabet
+        var pillColor: Int? = null
+        var pillIconRes = 0
+        var pillWords = ""
+        var text = ""
         if (problem != null) {
-            bg = red; icon = R.drawable.ic_warn; text = problem
+            pillColor = red; pillIconRes = R.drawable.ic_warn; pillWords = problem
         } else {
-            text = when (fb) {
-                Hub.Fb.IDLE -> if (listening) "Klar" else ""
-                else -> Hub.statusText
-            }
             when (fb) {
-                Hub.Fb.IDLE -> { bg = pal.bar; icon = null }
-                Hub.Fb.READ -> { bg = amber; icon = R.drawable.ic_rfid_on }
-                Hub.Fb.SEEN -> { bg = pal.bar; icon = R.drawable.ic_check }
-                Hub.Fb.ALARM_OFF -> { bg = green; icon = R.drawable.ic_bell_off }
-                Hub.Fb.ALARM_ON -> { bg = ciceroBlue; icon = R.drawable.ic_bell }
-                Hub.Fb.WRITTEN -> { bg = green; icon = R.drawable.ic_check }
-                Hub.Fb.ERROR -> { bg = red; icon = R.drawable.ic_warn }
+                Hub.Fb.IDLE -> text = if (listening) "Klar" else ""
+                Hub.Fb.READ -> text = Hub.statusText
+                Hub.Fb.SEEN -> { pillColor = gray; pillIconRes = R.drawable.ic_check; pillWords = "Læst" }
+                Hub.Fb.ALARM_OFF -> { pillColor = green; pillIconRes = R.drawable.ic_bell_off; pillWords = "Alarm fra" }
+                Hub.Fb.ALARM_ON -> { pillColor = orange; pillIconRes = R.drawable.ic_bell; pillWords = "Alarm til" }
+                Hub.Fb.WRITTEN -> { pillColor = green; pillIconRes = R.drawable.ic_check; pillWords = "Skrevet" }
+                Hub.Fb.ERROR -> { pillColor = red; pillIconRes = R.drawable.ic_warn; pillWords = Hub.statusText }
             }
         }
-        val onColor = bg != pal.bar
-        val fg = if (onColor) Color.WHITE else pal.text
 
-        bar.setBackgroundColor(bg)
-        setSystemBar(bg, light = !onColor && pal.lightBar)
-        status.text = text
-        status.setTextColor(fg)
-        detail.text = if (problem == null && fb != Hub.Fb.IDLE) Hub.statusDetail else ""
-        detail.setTextColor(if (onColor) Color.WHITE else pal.sub)
-        menuBtn.setTextColor(if (onColor) Color.WHITE else pal.sub)
-        if (icon != null) {
-            stateIcon.setImageResource(icon)
-            stateIcon.imageTintList = ColorStateList.valueOf(if (fb == Hub.Fb.SEEN && !onColor) green else fg)
-            stateIcon.visibility = View.VISIBLE
+        bar.setBackgroundColor(pal.bar)
+        setSystemBar(pal.bar, light = pal.lightBar)
+        menuBtn.setTextColor(pal.sub)
+
+        if (pillColor != null) {
+            pillBg.setColor(pillColor)
+            pillIcon.setImageResource(pillIconRes)
+            pillText.text = pillWords
+            pill.visibility = View.VISIBLE
         } else {
-            stateIcon.visibility = View.GONE
+            pill.visibility = View.GONE
         }
+        status.text = text
+        status.setTextColor(pal.text)
+        detail.text = if (problem == null && fb != Hub.Fb.IDLE) Hub.statusDetail else ""
+        detail.setTextColor(pal.sub)
 
         // Samme ikon som Ciceros egen RFID-knap: blå når Cicero lytter, grå og overstreget når ikke
         rfidIcon.setImageResource(if (listening) R.drawable.ic_rfid_on else R.drawable.ic_rfid_off)
         rfidCircle.setColor(if (listening) pal.blue else pal.offCircle)
-        rfidCircle.setStroke(if (onColor) dp(1) else 0, Color.WHITE)
         rfidIcon.imageTintList = ColorStateList.valueOf(if (listening) Color.WHITE else pal.text)
 
+        // Kort, svagt farveblink over Cicero ved alarmskift og fejl
         val seq = Hub.feedbackSeq
         if (seq != lastSeq) {
             lastSeq = seq
             val flashColor = when (fb) {
                 Hub.Fb.ALARM_OFF, Hub.Fb.WRITTEN -> green
-                Hub.Fb.ALARM_ON -> ciceroBlue
+                Hub.Fb.ALARM_ON -> orange
                 Hub.Fb.ERROR -> red
                 else -> null
             }
             if (flashColor != null) {
                 flash.setBackgroundColor(flashColor)
                 flash.animate().cancel()
-                flash.alpha = 0.45f
-                flash.animate().alpha(0f).setStartDelay(350).setDuration(700).start()
+                flash.alpha = 0.3f
+                flash.animate().alpha(0f).setStartDelay(250).setDuration(600).start()
             }
         }
     }

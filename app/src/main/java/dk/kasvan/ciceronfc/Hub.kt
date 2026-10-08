@@ -102,9 +102,9 @@ object Hub {
                 buzz(longArrayOf(0, 110, 80, 110))
                 Beeper.play(880 to 90, 0 to 40, 1320 to 140)
             }
-            // Alarm til: ét dybt bip + én vibration
+            // Alarm til: ét dybt bip + én lang vibration
             Fb.ALARM_ON -> {
-                buzz(longArrayOf(0, 260))
+                buzz(longArrayOf(0, 450))
                 Beeper.play(440 to 260)
             }
             Fb.WRITTEN -> {
@@ -112,7 +112,7 @@ object Hub {
                 Beeper.play(660 to 90, 0 to 40, 660 to 90)
             }
             Fb.ERROR -> {
-                buzz(longArrayOf(0, 700))
+                buzz(longArrayOf(0, 80, 70, 80, 70, 80))
                 Beeper.play(220 to 550)
             }
             Fb.IDLE, Fb.SEEN -> {}
