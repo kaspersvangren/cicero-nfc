@@ -178,6 +178,7 @@ object Server {
             clients.remove(client)
             try { sock.close() } catch (_: Exception) {}
             LogBuf.add("Cicero lukkede hændelses-forbindelsen")
+            Hub.onClientsChanged()
         }
     }
 

@@ -151,10 +151,10 @@ object Hub {
         Server.broadcast("addTag", state.toJson().toString())
         if (Server.clientCount() == 0) {
             LogBuf.add("Læst: ${state.label()} · alarm ${afiText(state.afi)} (Cicero lytter ikke)")
-            signal(Fb.READ, "Læst: ${state.label()} – men Cicero lytter ikke. Åbn Udlån eller Aflevering og hold bogen der")
+            signal(Fb.READ, "Læst: ${state.label()} – Cicero lytter ikke, aktiver RFID")
         } else {
             LogBuf.add("Læst: ${state.label()} · alarm ${afiText(state.afi)}")
-            signal(Fb.READ, "Læst: ${state.label()} (${afiText(state.afi)}) – hold stille…")
+            signal(Fb.READ, "Læst: ${state.label()} – hold stille")
         }
     }
 
@@ -162,13 +162,19 @@ object Hub {
      * Cicero er begyndt at lytte (fx skiftet til Aflevering). En rigtig læser melder de
      * bøger, der allerede ligger på den – det gør vi også.
      */
+    /** Cicero har åbnet eller lukket forbindelsen – opdatér RFID-ikonet. */
+    fun onClientsChanged() {
+        statusListener?.invoke()
+    }
+
     fun onClientConnected() {
+        onClientsChanged()
         exec.schedule(Runnable {
             if (inventory.isEmpty()) return@Runnable
             for (s in inventory.values) Server.broadcast("addTag", s.toJson().toString())
             val names = inventory.values.joinToString { it.label() }
             LogBuf.add("Cicero lytter nu – sendt bog der allerede lå ved telefonen: $names")
-            signal(Fb.READ, "Læst: $names – hold stille…")
+            signal(Fb.READ, "Læst: $names – hold stille")
         }, 200, TimeUnit.MILLISECONDS)
     }
 
@@ -231,7 +237,7 @@ object Hub {
         val word = if (on) "TIL (sikret)" else "FRA (udlånt)"
         if (inventory.isEmpty()) {
             LogBuf.add("Alarm $word: ingen bog ved telefonen")
-            signal(Fb.ERROR, "⚠ Bogen blev fjernet for tidligt – alarmen er IKKE skiftet")
+            signal(Fb.ERROR, "⚠ Fjernet for tidligt – alarmen er ikke skiftet")
             return@onExec Result(400, "Inventory empty")
         }
         for (s in inventory.values) {
@@ -242,13 +248,13 @@ object Hub {
             } catch (e: Exception) {
                 count("WriteAFIFail")
                 LogBuf.add("Alarm $word FEJLEDE på ${s.label()}: ${e.message}")
-                signal(Fb.ERROR, "⚠ Alarmen kunne ikke skrives – hold bogen mod telefonen igen")
+                signal(Fb.ERROR, "⚠ Alarmen kunne ikke skrives – prøv igen")
                 return@onExec Result(500, "Failed activating alarm on id ${s.mac}, err: ${e.message} ")
             }
         }
         val names = inventory.values.joinToString { it.label() }
         LogBuf.add("Alarm $word: $names")
-        signal(Fb.DONE, "✓ Alarm ${if (on) "slået TIL" else "slået FRA"}: $names – fjern bogen")
+        signal(Fb.DONE, "✓ $names: alarm ${if (on) "til" else "fra"} – fjern bogen")
         Result(200, "OK")
     }
 

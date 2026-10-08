@@ -1,28 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- App-ikon: Ciceros RFID-symbol på Cicero-blå -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M38,54 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M46,42 A17,17 0 0,1 46,66"
-        android:strokeWidth="5"
-        android:strokeColor="#FFFFFF"
-        android:strokeLineCap="round" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M54,35 A26,26 0 0,1 54,73"
-        android:strokeWidth="5"
-        android:strokeColor="#FFFFFF"
-        android:strokeLineCap="round" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M62,28 A35,35 0 0,1 62,80"
-        android:strokeWidth="5"
-        android:strokeColor="#FFFFFF"
-        android:strokeLineCap="round" />
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:scaleX="2.2"
+        android:scaleY="2.2"
+        android:translateX="42"
+        android:translateY="42">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M12,12 m-2.2,0 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0" />
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M15.5,8.5 A5,5 0 0,1 15.5,15.5 M8.5,8.5 A5,5 0 0,0 8.5,15.5 M18.4,5.6 A9,9 0 0,1 18.4,18.4 M5.6,5.6 A9,9 0 0,0 5.6,18.4"
+            android:strokeWidth="2"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round" />
+    </group>
 </vector>
