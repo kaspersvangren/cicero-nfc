@@ -2,7 +2,9 @@ package dk.kasvan.ciceronfc
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
@@ -21,6 +23,7 @@ import android.view.View
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
+import android.webkit.PermissionRequest
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -87,6 +90,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private var resumed = false
     private var nfc: NfcAdapter? = null
     private var lastSeq = -1
+    private var pendingCamera: PermissionRequest? = null
+    private val cameraRequestCode = 42
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -313,6 +318,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             loadWithOverviewMode = true
             useWideViewPort = true
+            // Ciceros kamerascanning skal kunne vise kamerabilledet uden ekstra tryk
+            mediaPlaybackRequiresUserGesture = false
             // Ser ud som almindelig Chrome, ikke som en indlejret browser
             userAgentString = userAgentString.replace("; wv", "")
         }
@@ -345,6 +352,27 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 return true
             }
 
+            // Cicero beder om kameraet (scan lånernr.). Kun Ciceros egen side får lov.
+            override fun onPermissionRequest(request: PermissionRequest) {
+                val wantsCamera = request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+                val host = request.origin?.host ?: ""
+                if (!wantsCamera || !(host == "systematic.com" || host.endsWith(".systematic.com"))) {
+                    request.deny()
+                    return
+                }
+                if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                    request.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+                } else {
+                    pendingCamera?.deny()
+                    pendingCamera = request
+                    requestPermissions(arrayOf(Manifest.permission.CAMERA), cameraRequestCode)
+                }
+            }
+
+            override fun onPermissionRequestCanceled(request: PermissionRequest) {
+                if (pendingCamera === request) pendingCamera = null
+            }
+
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 progress.progress = newProgress
                 progress.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
@@ -352,6 +380,19 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         }
 
         if (saved != null) web.restoreState(saved) else web.loadUrl(START_URL)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != cameraRequestCode) return
+        val req = pendingCamera ?: return
+        pendingCamera = null
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            req.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+        } else {
+            req.deny()
+            LogBuf.add("Kamera: tilladelse afvist")
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
