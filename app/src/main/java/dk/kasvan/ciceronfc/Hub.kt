@@ -3,8 +3,6 @@ package dk.kasvan.ciceronfc
 import android.content.Context
 import android.nfc.Tag
 import android.media.AudioAttributes
-import android.media.AudioManager
-import android.media.ToneGenerator
 import android.os.Build
 import android.os.SystemClock
 import android.os.VibrationAttributes
@@ -59,17 +57,21 @@ object Hub {
     private var lastLibrary = DEFAULT_LIBRARY
 
     @Volatile var mode = "IDLE"
-    @Volatile var statusText = "Klar – hold en bog mod telefonen"
+    @Volatile var statusText = ""
+        private set
+    @Volatile var statusDetail = ""
         private set
 
-    /** Hvad brugeren skal se/høre/mærke lige nu. */
-    enum class Fb { IDLE, READ, DONE, ERROR }
+    /**
+     * Hvad brugeren skal se/høre/mærke lige nu.
+     * READ = læst, venter på Cicero · SEEN = læst, Cicero skiftede ikke alarm (fx en ren opslagsside)
+     */
+    enum class Fb { IDLE, READ, SEEN, ALARM_OFF, ALARM_ON, WRITTEN, ERROR }
 
     @Volatile var feedback = Fb.IDLE
         private set
     @Volatile var feedbackSeq = 0
         private set
-    private var toneGen: ToneGenerator? = null
     @Volatile var statusListener: (() -> Unit)? = null
 
     private val counters = linkedMapOf(
@@ -88,23 +90,42 @@ object Hub {
         LogBuf.add("Cicero NFC ${BuildConfigInfo.version(ctx)} startet")
     }
 
-    private fun signal(fb: Fb, text: String) {
+    private fun signal(fb: Fb, text: String, detail: String = "") {
         feedback = fb
         feedbackSeq++
         statusText = text
+        statusDetail = detail
         when (fb) {
             Fb.READ -> buzz(longArrayOf(0, 30))
-            Fb.DONE -> {
-                buzz(longArrayOf(0, 120, 90, 120))
-                tone(ToneGenerator.TONE_PROP_ACK, 300)
+            // Alarm fra: to stigende bip + dobbelt-vibration
+            Fb.ALARM_OFF -> {
+                buzz(longArrayOf(0, 110, 80, 110))
+                Beeper.play(880 to 90, 0 to 40, 1320 to 140)
+            }
+            // Alarm til: ét dybt bip + én vibration
+            Fb.ALARM_ON -> {
+                buzz(longArrayOf(0, 260))
+                Beeper.play(440 to 260)
+            }
+            Fb.WRITTEN -> {
+                buzz(longArrayOf(0, 110, 80, 110))
+                Beeper.play(660 to 90, 0 to 40, 660 to 90)
             }
             Fb.ERROR -> {
                 buzz(longArrayOf(0, 700))
-                tone(ToneGenerator.TONE_SUP_ERROR, 700)
+                Beeper.play(220 to 550)
             }
-            Fb.IDLE -> {}
+            Fb.IDLE, Fb.SEEN -> {}
         }
         statusListener?.invoke()
+    }
+
+    /** Hvis Cicero ikke skifter alarm inden 1,5 s, er det en side der bare læser. */
+    private fun settleToSeenLater() {
+        val seq = feedbackSeq
+        exec.schedule(Runnable {
+            if (feedbackSeq == seq && feedback == Fb.READ) signal(Fb.SEEN, "Læst", statusDetail)
+        }, 1500, TimeUnit.MILLISECONDS)
     }
 
     private fun count(k: String) {
@@ -151,10 +172,11 @@ object Hub {
         Server.broadcast("addTag", state.toJson().toString())
         if (Server.clientCount() == 0) {
             LogBuf.add("Læst: ${state.label()} · alarm ${afiText(state.afi)} (Cicero lytter ikke)")
-            signal(Fb.READ, "Læst: ${state.label()} – Cicero lytter ikke, aktiver RFID")
+            signal(Fb.READ, "Aktiver RFID", state.label())
         } else {
             LogBuf.add("Læst: ${state.label()} · alarm ${afiText(state.afi)}")
-            signal(Fb.READ, "Læst: ${state.label()} – hold stille")
+            signal(Fb.READ, "Hold stille", state.label())
+            settleToSeenLater()
         }
     }
 
@@ -174,7 +196,8 @@ object Hub {
             for (s in inventory.values) Server.broadcast("addTag", s.toJson().toString())
             val names = inventory.values.joinToString { it.label() }
             LogBuf.add("Cicero lytter nu – sendt bog der allerede lå ved telefonen: $names")
-            signal(Fb.READ, "Læst: $names – hold stille")
+            signal(Fb.READ, "Hold stille", names)
+            settleToSeenLater()
         }, 200, TimeUnit.MILLISECONDS)
     }
 
@@ -195,7 +218,7 @@ object Hub {
         s.phone.close()
         Server.broadcast("removeTag", s.toJson().toString())
         LogBuf.add("Væk: ${s.label()} ($why)")
-        if (feedback != Fb.ERROR) signal(Fb.IDLE, "Klar – hold en bog mod telefonen")
+        if (feedback != Fb.ERROR) signal(Fb.IDLE, "")
     }
 
     // ---------- Det Cicero kalder (via Server) ----------
@@ -237,7 +260,7 @@ object Hub {
         val word = if (on) "TIL (sikret)" else "FRA (udlånt)"
         if (inventory.isEmpty()) {
             LogBuf.add("Alarm $word: ingen bog ved telefonen")
-            signal(Fb.ERROR, "⚠ Fjernet for tidligt – alarmen er ikke skiftet")
+            signal(Fb.ERROR, "For tidligt – alarm ikke skiftet")
             return@onExec Result(400, "Inventory empty")
         }
         for (s in inventory.values) {
@@ -248,13 +271,13 @@ object Hub {
             } catch (e: Exception) {
                 count("WriteAFIFail")
                 LogBuf.add("Alarm $word FEJLEDE på ${s.label()}: ${e.message}")
-                signal(Fb.ERROR, "⚠ Alarmen kunne ikke skrives – prøv igen")
+                signal(Fb.ERROR, "Alarm-fejl – prøv igen", s.label())
                 return@onExec Result(500, "Failed activating alarm on id ${s.mac}, err: ${e.message} ")
             }
         }
         val names = inventory.values.joinToString { it.label() }
         LogBuf.add("Alarm $word: $names")
-        signal(Fb.DONE, "✓ $names: alarm ${if (on) "til" else "fra"} – fjern bogen")
+        if (on) signal(Fb.ALARM_ON, "Alarm til", names) else signal(Fb.ALARM_OFF, "Alarm fra", names)
         Result(200, "OK")
     }
 
@@ -268,12 +291,12 @@ object Hub {
                 writeContent(s, barcode, numItems = n, seqNum = i)
             } catch (e: Exception) {
                 LogBuf.add("Skriv $barcode FEJLEDE: ${e.message}")
-                signal(Fb.ERROR, "⚠ Kunne ikke skrive $barcode – prøv igen")
+                signal(Fb.ERROR, "Skrivning fejlede", barcode)
                 return@onExec Result(400, "Error writing inventory: ${e.message}")
             }
         }
         LogBuf.add("Skrevet: $barcode til $n tag(s)")
-        signal(Fb.DONE, "✓ Skrevet: $barcode – fjern bogen")
+        signal(Fb.WRITTEN, "Skrevet", barcode)
         Result(200, inventoryJsonLocal(), json = true)
     }
 
@@ -289,11 +312,11 @@ object Hub {
             )
         } catch (e: Exception) {
             LogBuf.add("Skriv $barcode FEJLEDE: ${e.message}")
-            signal(Fb.ERROR, "⚠ Kunne ikke skrive $barcode – prøv igen")
+            signal(Fb.ERROR, "Skrivning fejlede", barcode)
             return@onExec Result(400, "Error writing tag: ${e.message}")
         }
         LogBuf.add("Skrevet: $barcode til ${s.mac}")
-        signal(Fb.DONE, "✓ Skrevet: $barcode – fjern bogen")
+        signal(Fb.WRITTEN, "Skrevet", barcode)
         Result(200, s.toJson().toString(), json = true)
     }
 
@@ -351,17 +374,6 @@ object Hub {
             }
         } catch (e: Exception) {
             LogBuf.add("Vibration fejlede: ${e.message}")
-        }
-    }
-
-    // Bip via medie-lydstyrken (ikke ringelyden, som er slukket i lydløs tilstand)
-    private fun tone(type: Int, ms: Int) {
-        try {
-            if (toneGen == null) toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
-            toneGen?.startTone(type, ms)
-        } catch (e: Exception) {
-            toneGen = null
-            LogBuf.add("Bip fejlede: ${e.message}")
         }
     }
 }

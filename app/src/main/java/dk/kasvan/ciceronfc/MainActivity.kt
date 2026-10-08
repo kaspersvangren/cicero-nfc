@@ -61,6 +61,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         lightBar = false,
     )
     private val amber = Color.parseColor("#B7791F")
+    private val ciceroBlue = Color.parseColor("#0078D3")
     private val green = Color.parseColor("#2F855A")
     private val red = Color.parseColor("#C53030")
 
@@ -70,6 +71,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private lateinit var rfidIcon: ImageView
     private lateinit var rfidCircle: GradientDrawable
     private lateinit var status: TextView
+    private lateinit var stateIcon: ImageView
+    private lateinit var detail: TextView
     private lateinit var menuBtn: TextView
     private lateinit var progress: ProgressBar
     private lateinit var flash: View
@@ -110,33 +113,44 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(6), dp(4), dp(6))
-            minimumHeight = dp(52)
+            setPadding(dp(6), dp(3), 0, dp(3))
+            minimumHeight = dp(34)
         }
 
         rfidCircle = GradientDrawable().apply { shape = GradientDrawable.OVAL }
         rfidIcon = ImageView(this).apply {
             background = rfidCircle
-            setPadding(dp(7), dp(7), dp(7), dp(7))
+            setPadding(dp(5), dp(5), dp(5), dp(5))
             contentDescription = "RFID-status"
         }
-        bar.addView(rfidIcon, LinearLayout.LayoutParams(dp(38), dp(38)))
+        bar.addView(rfidIcon, LinearLayout.LayoutParams(dp(26), dp(26)))
+
+        stateIcon = ImageView(this).apply { visibility = View.GONE }
+        bar.addView(stateIcon, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginStart = dp(10) })
 
         status = TextView(this).apply {
-            textSize = 15f
+            textSize = 14f
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            maxLines = 2
+            maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            setPadding(dp(12), 0, dp(4), 0)
+            setPadding(dp(8), 0, dp(4), 0)
             setOnClickListener { openNfcSettingsIfOff() }
         }
         bar.addView(status, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
+        detail = TextView(this).apply {
+            textSize = 11f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.START
+            setPadding(dp(4), 0, dp(2), 0)
+        }
+        bar.addView(detail)
+
         menuBtn = TextView(this).apply {
             text = "⋮"
-            textSize = 22f
+            textSize = 18f
             gravity = Gravity.CENTER
-            setPadding(dp(14), dp(4), dp(14), dp(4))
+            setPadding(dp(10), 0, dp(12), 0)
             contentDescription = "Menu"
             setOnClickListener { showMenu(it) }
         }
@@ -359,45 +373,69 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         val n = nfc
         val listening = Server.clientCount() > 0
         val problem = when {
-            n == null -> "Denne telefon har ingen NFC"
+            n == null -> "Ingen NFC på denne telefon"
             !n.isEnabled -> "NFC er slået fra – tryk her"
             !Server.listening -> "Starter…"
             else -> null
         }
         val fb = Hub.feedback
-        val text = when {
-            problem != null -> problem
-            fb == Hub.Fb.IDLE && listening -> "Klar – hold en bog mod telefonen"
-            // Mange Cicero-sider har ikke RFID, så her skal ikke stå en opfordring.
-            // "Aktiver RFID" vises kun, når man faktisk holder en bog mod telefonen.
-            fb == Hub.Fb.IDLE -> "Cicero NFC"
-            else -> Hub.statusText
-        }
-        val bg = when {
-            problem != null -> red
-            fb == Hub.Fb.READ -> amber
-            fb == Hub.Fb.DONE -> green
-            fb == Hub.Fb.ERROR -> red
-            else -> pal.bar
+
+        // Farve og symbol bærer budskabet; teksten er et eller to ord
+        var bg = pal.bar
+        var icon: Int? = null
+        val text: String
+        if (problem != null) {
+            bg = red; icon = R.drawable.ic_warn; text = problem
+        } else {
+            text = when (fb) {
+                Hub.Fb.IDLE -> if (listening) "Klar" else ""
+                else -> Hub.statusText
+            }
+            when (fb) {
+                Hub.Fb.IDLE -> { bg = pal.bar; icon = null }
+                Hub.Fb.READ -> { bg = amber; icon = R.drawable.ic_rfid_on }
+                Hub.Fb.SEEN -> { bg = pal.bar; icon = R.drawable.ic_check }
+                Hub.Fb.ALARM_OFF -> { bg = green; icon = R.drawable.ic_bell_off }
+                Hub.Fb.ALARM_ON -> { bg = ciceroBlue; icon = R.drawable.ic_bell }
+                Hub.Fb.WRITTEN -> { bg = green; icon = R.drawable.ic_check }
+                Hub.Fb.ERROR -> { bg = red; icon = R.drawable.ic_warn }
+            }
         }
         val onColor = bg != pal.bar
-        status.text = text
-        status.setTextColor(if (onColor) Color.WHITE else pal.text)
-        menuBtn.setTextColor(if (onColor) Color.WHITE else pal.sub)
+        val fg = if (onColor) Color.WHITE else pal.text
+
         bar.setBackgroundColor(bg)
         setSystemBar(bg, light = !onColor && pal.lightBar)
+        status.text = text
+        status.setTextColor(fg)
+        detail.text = if (problem == null && fb != Hub.Fb.IDLE) Hub.statusDetail else ""
+        detail.setTextColor(if (onColor) Color.WHITE else pal.sub)
+        menuBtn.setTextColor(if (onColor) Color.WHITE else pal.sub)
+        if (icon != null) {
+            stateIcon.setImageResource(icon)
+            stateIcon.imageTintList = ColorStateList.valueOf(if (fb == Hub.Fb.SEEN && !onColor) green else fg)
+            stateIcon.visibility = View.VISIBLE
+        } else {
+            stateIcon.visibility = View.GONE
+        }
 
         // Samme ikon som Ciceros egen RFID-knap: blå når Cicero lytter, grå og overstreget når ikke
         rfidIcon.setImageResource(if (listening) R.drawable.ic_rfid_on else R.drawable.ic_rfid_off)
         rfidCircle.setColor(if (listening) pal.blue else pal.offCircle)
-        rfidCircle.setStroke(if (onColor) dp(2) else 0, Color.WHITE)
+        rfidCircle.setStroke(if (onColor) dp(1) else 0, Color.WHITE)
         rfidIcon.imageTintList = ColorStateList.valueOf(if (listening) Color.WHITE else pal.text)
 
         val seq = Hub.feedbackSeq
         if (seq != lastSeq) {
             lastSeq = seq
-            if (fb == Hub.Fb.DONE || fb == Hub.Fb.ERROR) {
-                flash.setBackgroundColor(if (fb == Hub.Fb.DONE) green else red)
+            val flashColor = when (fb) {
+                Hub.Fb.ALARM_OFF, Hub.Fb.WRITTEN -> green
+                Hub.Fb.ALARM_ON -> ciceroBlue
+                Hub.Fb.ERROR -> red
+                else -> null
+            }
+            if (flashColor != null) {
+                flash.setBackgroundColor(flashColor)
                 flash.animate().cancel()
                 flash.alpha = 0.45f
                 flash.animate().alpha(0f).setStartDelay(350).setDuration(700).start()
