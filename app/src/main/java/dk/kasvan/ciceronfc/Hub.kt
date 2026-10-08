@@ -96,7 +96,8 @@ object Hub {
         statusText = text
         statusDetail = detail
         when (fb) {
-            Fb.READ -> buzz(longArrayOf(0, 30))
+            // Læst: kort tik (50 ms) i fuld styrke
+            Fb.READ -> buzz(longArrayOf(0, 50), intArrayOf(0, 255))
             // Alarm fra: to stigende bip + dobbelt-vibration
             Fb.ALARM_OFF -> {
                 buzz(longArrayOf(0, 110, 80, 110))
@@ -359,14 +360,18 @@ object Hub {
 
     // Vibration mærket som "alarm", så den også kommer igennem i lydløs tilstand
     @Suppress("DEPRECATION")
-    private fun buzz(pattern: LongArray) {
+    private fun buzz(pattern: LongArray, amplitudes: IntArray? = null) {
         try {
             val v: Vibrator = if (Build.VERSION.SDK_INT >= 31) {
                 ctx.getSystemService(VibratorManager::class.java).defaultVibrator
             } else {
                 ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
             }
-            val effect = VibrationEffect.createWaveform(pattern, -1)
+            val effect = if (amplitudes != null && v.hasAmplitudeControl()) {
+                VibrationEffect.createWaveform(pattern, amplitudes, -1)
+            } else {
+                VibrationEffect.createWaveform(pattern, -1)
+            }
             if (Build.VERSION.SDK_INT >= 33) {
                 v.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
             } else {
