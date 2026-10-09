@@ -38,6 +38,14 @@ jobs:
           fi
           echo "$KEYSTORE_B64" | base64 -d > app/release.keystore
 
+      - name: Ændringsliste ind i app'en
+        shell: bash
+        run: |
+          # "Næste version" i CHANGELOG.md får det rigtige versionsnummer
+          sed -i "s/^- \*\*Næste version\*\*/- **0.1.${{ github.run_number }}**/" CHANGELOG.md
+          mkdir -p app/src/main/assets
+          cp CHANGELOG.md app/src/main/assets/CHANGELOG.md
+
       - name: Byg APK
         shell: bash
         env:
@@ -59,12 +67,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app/build/outputs/apk/release/app-release.apk CiceroNFC.apk
-          # Ændringslisten er commit-beskeden (uden Co-Authored-By og lignende linjer)
-          git log -1 --format=%B | grep -v -E '^(Co-Authored-By|Claude-Session|Signed-off-by):' > notes.txt
+          # Udgivelsens tekst er versionens linje i CHANGELOG.md – ellers commit-beskeden
+          grep -m1 "^- \*\*0\.1\.${{ github.run_number }}\*\* – " CHANGELOG.md | sed 's/^- \*\*[^*]*\*\* – //' > notes.txt || true
+          if [ ! -s notes.txt ]; then
+            git log -1 --format=%B | grep -v -E '^(Co-Authored-By|Claude-Session|Signed-off-by):' > notes.txt
+          fi
           printf '\nBygget fra %s\n' "${GITHUB_SHA::7}" >> notes.txt
           gh release create "v0.1.${{ github.run_number }}" CiceroNFC.apk \
             --title "Cicero NFC 0.1.${{ github.run_number }}" \
             --notes-file notes.txt --latest
+
+      - name: Skriv versionsnummeret ind i CHANGELOG.md
+        shell: bash
+        run: |
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          if ! git diff --quiet -- CHANGELOG.md; then
+            git add CHANGELOG.md
+            git commit -qm "CHANGELOG: version 0.1.${{ github.run_number }}"
+            git push -q origin HEAD:main || echo "Kunne ikke skrive versionsnummeret tilbage (main er ændret imens)"
+          fi
 
       - name: Gem byggelog (til fejlfinding)
         if: always()

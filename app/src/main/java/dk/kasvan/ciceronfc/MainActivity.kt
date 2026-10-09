@@ -348,7 +348,42 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            maybeShowWhatsNew()
         }
+    }
+
+    /** Første gang efter en opdatering: vis kort, hvad der er nyt (vises når app'en er låst op). */
+    private fun maybeShowWhatsNew() {
+        val prefs = getSharedPreferences("ui", MODE_PRIVATE)
+        val current = Updater.currentCode(this)
+        val seen = prefs.getLong("seenVersion", -1L)
+        if (seen >= current) return
+        prefs.edit().putLong("seenVersion", current).apply()
+        val all = Changelog.entries(this)
+        // Har man sprunget versioner over, vises alle siden sidst; ellers kun den nyeste
+        val news = all.filter { it.code <= current && (if (seen < 0) it.code == current else it.code > seen) }
+        if (news.isEmpty()) return
+        val msg = if (news.size == 1) news[0].text else news.joinToString("\n\n") { "${it.name}: ${it.text}" }
+        AlertDialog.Builder(this)
+            .setTitle("Nyt i Cicero NFC ${BuildConfigInfo.version(this)}")
+            .setMessage(msg)
+            .setPositiveButton("OK", null)
+            .setNeutralButton("Alle ændringer") { _, _ -> showChangelog() }
+            .show()
+    }
+
+    private fun showChangelog() {
+        val all = Changelog.entries(this)
+        val msg = if (all.isEmpty()) {
+            "Ændringslisten følger ikke med i denne version."
+        } else {
+            all.joinToString("\n\n") { "${it.name}\n${it.text}" }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Ændringer")
+            .setMessage(msg)
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     /** Telefonens egen skærmlås: fingeraftryk, ansigt eller pinkode. App'en ser aldrig selve koden. */
@@ -487,7 +522,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         m.menu.add(0, 3, 2, "Genindlæs Cicero")
         if (isDeviceSecure()) m.menu.add(0, 6, 3, "Lås nu")
         m.menu.add(0, 7, 4, "Søg efter opdatering")
-        m.menu.add(0, 4, 4, "Om Cicero NFC")
+        m.menu.add(0, 8, 5, "Ændringer")
+        m.menu.add(0, 4, 6, "Om Cicero NFC")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> toggleLog()
@@ -496,6 +532,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 4 -> showAbout()
                 6 -> lock()
                 7 -> checkForUpdateNow()
+                8 -> showChangelog()
             }
             true
         }
