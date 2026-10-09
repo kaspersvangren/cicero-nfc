@@ -34,3 +34,26 @@ object LogBuf {
 
     fun text(): String = synchronized(this) { lines.joinToString("\n") }
 }
+
+/**
+ * Loggen ligger kun i hukommelsen og forsvinder ved et nedbrud. Derfor gemmes en kort
+ * beskrivelse af nedbruddet (fejltype og de øverste kodelinjer, ingen lånerdata) i en fil,
+ * som lægges ind i loggen ved næste start og derefter slettes.
+ */
+object CrashLog {
+    fun install(ctx: android.content.Context) {
+        val f = java.io.File(ctx.filesDir, "crash.txt")
+        if (f.exists()) {
+            try { LogBuf.add("Sidste nedbrud: " + f.readText().take(1500)) } catch (_: Exception) {}
+            f.delete()
+        }
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val top = e.stackTrace.take(8).joinToString("\n") { "  at $it" }
+                f.writeText("${Date()} ${e.javaClass.name}: ${e.message?.take(200)}\n$top")
+            } catch (_: Exception) {}
+            prev?.uncaughtException(t, e)
+        }
+    }
+}

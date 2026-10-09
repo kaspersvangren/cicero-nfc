@@ -40,7 +40,7 @@ object Hub {
 
         fun label(): String {
             val c = content ?: return "ukendt bog ($mac)"
-            val del = if (c.numItems > 1 || c.seqNum > 1) " del ${c.numItems}/${c.seqNum}" else ""
+            val del = if (c.numItems > 1 || c.seqNum > 1) " del ${c.seqNum}/${c.numItems}" else ""
             return c.barcode.ifEmpty { "tomt tag" } + del
         }
     }
@@ -89,9 +89,9 @@ object Hub {
         if (started) return
         started = true
         ctx = context.applicationContext
+        CrashLog.install(ctx)
         Server.start()
         exec.scheduleWithFixedDelay({ presenceCheck() }, 300, 300, TimeUnit.MILLISECONDS)
-        LogBuf.add("Cicero NFC ${BuildConfigInfo.version(ctx)} startet")
     }
 
     private fun signal(fb: Fb, text: String, detail: String = "") {
@@ -137,7 +137,11 @@ object Hub {
         counters[k] = (counters[k] ?: 0L) + 1
     }
 
-    private fun <T> onExec(f: () -> T): T = exec.submit(Callable(f)).get(10, TimeUnit.SECONDS)
+    private fun <T> onExec(f: () -> T): T = try {
+        exec.submit(Callable(f)).get(10, TimeUnit.SECONDS)
+    } catch (_: java.util.concurrent.TimeoutException) {
+        throw IllegalStateException("NFC svarede ikke inden for 10 sekunder")
+    }
 
     // ---------- NFC ----------
 
@@ -192,10 +196,6 @@ object Hub {
         }
     }
 
-    /**
-     * Cicero er begyndt at lytte (fx skiftet til Aflevering). En rigtig læser melder de
-     * bøger, der allerede ligger på den – det gør vi også.
-     */
     /** Cicero har åbnet eller lukket forbindelsen – opdatér RFID-ikonet. */
     fun onClientsChanged() {
         statusListener?.invoke()
@@ -206,6 +206,10 @@ object Hub {
         exec.execute { for (s in inventory.values.toList()) drop(s, "app'en blev låst") }
     }
 
+    /**
+     * Cicero er begyndt at lytte (fx skiftet til Aflevering). En rigtig læser melder de
+     * bøger, der allerede ligger på den – det gør vi også.
+     */
     fun onClientConnected() {
         onClientsChanged()
         exec.schedule(Runnable {

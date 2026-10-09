@@ -96,27 +96,7 @@ object Beeper {
                     }
                     pos += n
                 }
-                val track = AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build(),
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(RATE)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .build(),
-                    )
-                    .setTransferMode(AudioTrack.MODE_STATIC)
-                    .setBufferSizeInBytes(pcm.size * 2)
-                    .build()
-                track.write(pcm, 0, pcm.size)
-                track.play()
-                Thread.sleep(tones.sumOf { it.second }.toLong() + 150)
-                track.release()
+                playPcm(pcm, tones.sumOf { it.second })
             } catch (e: Exception) {
                 LogBuf.add("Bip fejlede: ${e.message}")
             }

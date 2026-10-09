@@ -46,9 +46,6 @@ object Server {
     // Højst 16 samtidige forbindelser; resten afvises i stedet for at starte uendeligt mange tråde
     private val pool = ThreadPoolExecutor(2, 16, 30, TimeUnit.SECONDS, SynchronousQueue())
 
-    @Volatile var listening = false
-        private set
-
     /** Sat hvis porten ikke kunne åbnes (fx fordi en anden app har taget den). Vises i bjælken. */
     @Volatile var bindError: String? = null
         private set
@@ -60,7 +57,6 @@ object Server {
                     val ss = ServerSocket()
                     ss.reuseAddress = true
                     ss.bind(InetSocketAddress(InetAddress.getByName(addr), PORT))
-                    if (addr == "127.0.0.1") listening = true
                     LogBuf.add("Server lytter på $addr:$PORT")
                     Hub.statusListener?.invoke()
                     while (true) {
@@ -226,7 +222,8 @@ object Server {
             out.flush()
         }
         clients += client
-        LogBuf.add("Cicero forbundet til hændelser (/events/) – ${clients.size} forbindelse(r)")
+        // Cicero åbner og lukker forbindelsen ved hvert skærmskift – log kun, når den begynder/holder op med at lytte
+        if (clients.size == 1) LogBuf.add("Cicero lytter (RFID slået til)")
         Hub.onClientConnected()
         try {
             sock.soTimeout = 0
@@ -235,7 +232,7 @@ object Server {
         } finally {
             clients.remove(client)
             try { sock.close() } catch (_: Exception) {}
-            LogBuf.add("Cicero lukkede hændelses-forbindelsen")
+            if (clients.isEmpty()) LogBuf.add("Cicero lytter ikke længere (RFID slået fra eller side uden RFID)")
             Hub.onClientsChanged()
         }
     }

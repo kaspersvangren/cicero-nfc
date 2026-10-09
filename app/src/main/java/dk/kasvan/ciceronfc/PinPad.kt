@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.View
@@ -14,17 +15,22 @@ import android.widget.TextView
 /**
  * Stort tastatur til lånerens pinkode. Dækker hele skærmen, så låneren hverken ser eller
  * rører resten af Cicero. Koden gemmes ikke – den sendes direkte til Ciceros felt.
+ *
+ * "Stor" giver ekstra store taster med høj kontrast (gult på sort) til svagtseende.
  */
 class PinPad(private val ctx: Context, private val dp: (Int) -> Int) {
     companion object {
         const val MIN_DIGITS = 4
         const val MAX_DIGITS = 16 // FBS 2.0 tillader op til 16 cifre
+        private val HC_BG = Color.BLACK
+        private val HC_FG = Color.parseColor("#FFD400")
     }
 
     var onOk: ((String) -> Unit)? = null
     var onCancel: (() -> Unit)? = null
     var onKeyboard: (() -> Unit)? = null
     var onFlip: (() -> Unit)? = null
+    var onBigChanged: ((Boolean) -> Unit)? = null
 
     private val digits = StringBuilder()
     private val keys = ArrayList<TextView>()
@@ -32,26 +38,30 @@ class PinPad(private val ctx: Context, private val dp: (Int) -> Int) {
     private val smallButtons = ArrayList<TextView>()
     private lateinit var okKey: TextView
     private lateinit var okBg: GradientDrawable
-    private var blue = Color.BLUE
-    private var keyBg = Color.GRAY
+    private lateinit var bigButton: TextView
+
+    // Farver fra Cicero (lys/mørk)
+    private var cBg = Color.DKGRAY
+    private var cText = Color.WHITE
+    private var cSub = Color.LTGRAY
+    private var cKey = Color.GRAY
+    private var cBlue = Color.BLUE
+
+    private var big = false
 
     private val title = TextView(ctx).apply {
         text = "Indtast pinkode"
-        textSize = 24f
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         gravity = Gravity.CENTER
     }
     private val dots = TextView(ctx).apply {
-        textSize = 36f
         gravity = Gravity.CENTER
-        letterSpacing = 0.3f
         maxLines = 1
         minHeight = dp(64)
     }
     private val box = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER_HORIZONTAL
-        setPadding(dp(24), dp(16), dp(24), dp(16))
+        setPadding(dp(16), dp(12), dp(16), dp(12))
     }
     val view = FrameLayout(ctx).apply {
         visibility = View.GONE
@@ -72,8 +82,6 @@ class PinPad(private val ctx: Context, private val dp: (Int) -> Int) {
                 val bg = GradientDrawable().apply { cornerRadius = dp(16).toFloat() }
                 val key = TextView(ctx).apply {
                     text = label
-                    textSize = if (label == "OK") 26f else 32f
-                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                     gravity = Gravity.CENTER
                     background = bg
                     contentDescription = if (label == "←") "Slet" else label
@@ -84,45 +92,42 @@ class PinPad(private val ctx: Context, private val dp: (Int) -> Int) {
             }
             box.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         }
-        // Til personalet: små knapper nederst
-        val bottom = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
+        // Til personalet: små knapper nederst, delt ligeligt i bredden
+        val bottom = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
         for ((label, action) in listOf<Pair<String, () -> Unit>>(
             "Annuller" to { hide(); onCancel?.invoke() },
             "Tastatur" to { hide(); onKeyboard?.invoke() },
             "Vend" to { onFlip?.invoke() },
+            "Stor" to { setBig(!big); onBigChanged?.invoke(big) },
         )) {
             val b = TextView(ctx).apply {
                 text = label
                 textSize = 15f
                 gravity = Gravity.CENTER
-                setPadding(dp(16), dp(12), dp(16), dp(12))
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(dp(4), dp(12), dp(4), dp(12))
                 setOnClickListener { action() }
             }
+            if (label == "Stor") bigButton = b
             smallButtons += b
-            bottom.addView(b)
+            bottom.addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
         box.addView(bottom, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(12)
+            topMargin = dp(8)
         })
-        // Fylder bredden på små telefoner, men bliver ikke kæmpestor på store
-        val w = minOf(ctx.resources.displayMetrics.widthPixels, dp(420))
-        view.addView(box, FrameLayout.LayoutParams(w, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
-        update()
+        view.addView(box, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        style()
     }
 
     fun setColors(bg: Int, text: Int, sub: Int, key: Int, blue: Int) {
-        this.blue = blue
-        this.keyBg = key
-        view.setBackgroundColor(bg)
-        title.setTextColor(text)
-        dots.setTextColor(text)
-        keys.forEach { it.setTextColor(text) }
-        keyBgs.forEach { it.setColor(key) }
-        smallButtons.forEach { it.setTextColor(sub) }
-        update()
+        cBg = bg; cText = text; cSub = sub; cKey = key; cBlue = blue
+        style()
+    }
+
+    fun setBig(on: Boolean) {
+        big = on
+        style()
     }
 
     fun show(flipped: Boolean) {
@@ -157,17 +162,64 @@ class PinPad(private val ctx: Context, private val dp: (Int) -> Int) {
         update()
     }
 
+    /** Normal: Ciceros farver. Stor: gult på sort, store fede tal og høje taster. */
+    private fun style() {
+        val bold = Typeface.create("sans-serif", Typeface.BOLD)
+        val medium = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        // Fylder bredden på små telefoner; i normal størrelse bliver den ikke kæmpestor på store
+        val w = if (big) ctx.resources.displayMetrics.widthPixels else minOf(ctx.resources.displayMetrics.widthPixels, dp(420))
+        box.layoutParams = (box.layoutParams as FrameLayout.LayoutParams).apply { width = w }
+
+        // Store taster, men aldrig højere end at alt kan være på skærmen
+        val dm = ctx.resources.displayMetrics
+        val keyH = if (big) ((dm.heightPixels / dm.density - 280) / 4 - 12).toInt().coerceIn(64, 100) else 76
+        view.setBackgroundColor(if (big) HC_BG else cBg)
+        title.setTextColor(if (big) Color.WHITE else cText)
+        title.textSize = if (big) 30f else 24f
+        title.typeface = if (big) bold else medium
+        dots.setTextColor(if (big) HC_FG else cText)
+
+        for ((i, k) in keys.withIndex()) {
+            k.setTextColor(if (big) HC_FG else cText)
+            k.textSize = if (big) 50f else 32f
+            k.typeface = if (big) bold else medium
+            keyBgs[i].setColor(if (big) HC_BG else cKey)
+            keyBgs[i].setStroke(if (big) dp(3) else 0, HC_FG)
+            (k.layoutParams as LinearLayout.LayoutParams).height = dp(keyH)
+        }
+        okKey.textSize = if (big) 36f else 26f
+        okKey.typeface = if (big) bold else medium
+        (okKey.layoutParams as LinearLayout.LayoutParams).height = dp(keyH)
+        okBg.setStroke(if (big) dp(3) else 0, HC_FG)
+
+        smallButtons.forEach {
+            it.setTextColor(if (big) Color.WHITE else cSub)
+            it.textSize = if (big) 17f else 15f
+        }
+        bigButton.text = if (big) "Normal" else "Stor"
+        box.requestLayout()
+        update()
+    }
+
     private fun update() {
         dots.text = "●".repeat(digits.length)
         // Mindre prikker ved lange koder, så de altid kan stå på én linje
         val n = digits.length
-        dots.textSize = when { n <= 8 -> 36f; n <= 12 -> 26f; else -> 20f }
-        dots.letterSpacing = if (n <= 8) 0.3f else 0.15f
-        val ready = digits.length >= MIN_DIGITS
-        if (::okBg.isInitialized) {
-            okBg.setColor(if (ready) blue else keyBg)
-            okKey.setTextColor(Color.WHITE)
-            okKey.alpha = if (ready) 1f else 0.45f
+        dots.textSize = when {
+            n <= 8 -> if (big) 46f else 36f
+            n <= 12 -> if (big) 34f else 26f
+            else -> if (big) 26f else 20f
         }
+        dots.letterSpacing = if (n <= 8) 0.3f else 0.12f
+        if (!::okBg.isInitialized) return
+        val ready = digits.length >= MIN_DIGITS
+        if (big) {
+            okBg.setColor(if (ready) HC_FG else HC_BG)
+            okKey.setTextColor(if (ready) Color.BLACK else HC_FG)
+        } else {
+            okBg.setColor(if (ready) cBlue else cKey)
+            okKey.setTextColor(Color.WHITE)
+        }
+        okKey.alpha = if (ready) 1f else 0.45f
     }
 }

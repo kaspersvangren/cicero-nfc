@@ -1,5 +1,6 @@
 # Ændringer
 
+- **Næste version** – Knappen "Stor" på pinkode-tastaturet giver store taster med gult på sort til svagtseende. Mere nyttig log (opstart, side, tema, NFC, oplåsning, nedbrud) uden personoplysninger. Oprydning i koden; materialer i flere dele vises nu som "del 1/2".
 - **0.1.30** – Lys/mørk tilstand aflæses mere sikkert (lånerbilledets mørkeblå top narrer den ikke længere). Pinkode op til 16 cifre; overskriften hedder "Indtast pinkode".
 - **0.1.29** – Stort pinkode-tastatur til låneren, når Ciceros pinkode-felt vælges; kan vendes på hovedet. Begge slås til og fra i menuen ⋮. Kortere Om-tekst.
 - **0.1.28** – Spørger ikke om fingeraftryk eller pinkode, når man ikke er logget ind i Cicero (login-siden står fremme).
