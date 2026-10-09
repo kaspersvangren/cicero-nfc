@@ -10,6 +10,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
@@ -99,6 +100,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private lateinit var updateBg: GradientDrawable
     private var updateAfterPermission = false
     private val blockedHosts = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /** Fejl i Ciceros RFID-opsætning (Hostname/Port), opdaget når Cicero prøver at forbinde. */
+    private data class SetupError(val msg: String, val found: String)
+    @Volatile private var setupError: SetupError? = null
     private lateinit var progress: ProgressBar
     private lateinit var flash: View
     private lateinit var logScroll: ScrollView
@@ -174,7 +179,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             background = pillBg
             setPadding(dp(8), dp(3), dp(10), dp(3))
             visibility = View.GONE
-            setOnClickListener { openNfcSettingsIfOff() }
+            setOnClickListener { onProblemClick() }
         }
         pillIcon = ImageView(this).apply { imageTintList = ColorStateList.valueOf(Color.WHITE) }
         pill.addView(pillIcon, LinearLayout.LayoutParams(dp(15), dp(15)))
@@ -195,7 +200,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             setPadding(dp(8), 0, dp(4), 0)
-            setOnClickListener { openNfcSettingsIfOff() }
+            setOnClickListener { onProblemClick() }
         }
         bar.addView(status, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
@@ -507,7 +512,75 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     "Slå \"RFID-scanner til som standard\" til.\n\n" +
                     "Hold bogen mod telefonen, til den vibrerer og pillen viser alarm fra/til.\n\n" +
                     "App'en låser sig efter 5 minutter uden brug og låses op med telefonens fingeraftryk eller pinkode.\n\n" +
-                    "App'en tjekker GitHub for nye versioner (højst hver 6. time). Der sendes ingen data.",
+                    "App'en tjekker GitHub for nye versioner (højst hver 6. time). Der sendes ingen data.\n\n" +
+                    "Designet og testet af Kasper Svangren, Gladsaxe Bibliotekerne. Kodet med AI-assistance (Claude).\n\n" +
+                    "Tak til Deichman bibliotek i Oslo, hvis open source-program go-feig (MIT-licens) har givet protokollen, " +
+                    "som Cicero taler med RFID-læseren. Der er ikke kopieret kode fra go-feig.",
+            )
+            .setPositiveButton("OK", null)
+            .setNeutralButton("Open source-licenser") { _, _ -> showLicenses() }
+            .show()
+    }
+
+    private fun showLicenses() {
+        AlertDialog.Builder(this)
+            .setTitle("Open source-licenser")
+            .setMessage(
+                "Cicero NFC indeholder:\n\n" +
+                    "Kotlin Standard Library\n" +
+                    "Copyright JetBrains s.r.o. and Kotlin Programming Language contributors\n" +
+                    "Apache License 2.0\n\n" +
+                    "Licensed under the Apache License, Version 2.0. You may obtain a copy of the License at " +
+                    "https://www.apache.org/licenses/LICENSE-2.0\n\n" +
+                    "Unless required by applicable law or agreed to in writing, software distributed under the " +
+                    "License is distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.",
+            )
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    /**
+     * Cicero kalder RFID-læseren på den adresse, der står under Enhedsindstillinger → RFID scanner.
+     * Er Hostname eller Port forkert (mellemrum, stavefejl, forkert tal), siges det tydeligt i bjælken.
+     */
+    private fun checkRfidSetup(u: Uri, scheme: String?, host: String) {
+        val path = u.path ?: return
+        if (path !in RFID_PATHS) return
+        if (host == "systematic.com" || host.endsWith(".systematic.com")) return
+        val port = if (u.port != -1) u.port else if (scheme == "https") 443 else 80
+        val err = when {
+            host !in LOCAL_HOSTS && host.trim() in LOCAL_HOSTS ->
+                SetupError("Fjern mellemrum i Hostname", "'$host'")
+            host !in LOCAL_HOSTS -> SetupError("Hostname skal være localhost", "'$host'")
+            port != Server.PORT -> SetupError("Port skal være ${Server.PORT}", "$port")
+            else -> null
+        }
+        if (err == setupError) return
+        setupError = err
+        if (err != null) {
+            LogBuf.add("RFID-opsætning i Cicero er forkert: ${err.msg} (står: ${err.found})")
+        } else {
+            LogBuf.add("RFID-opsætning i Cicero er rettet")
+        }
+        runOnUiThread { refreshStatus() }
+    }
+
+    private fun onProblemClick() {
+        val n = nfc
+        if (n != null && !n.isEnabled) {
+            startActivity(Intent(Settings.ACTION_NFC_SETTINGS))
+            return
+        }
+        val err = setupError ?: return
+        AlertDialog.Builder(this)
+            .setTitle("RFID-opsætningen i Cicero er forkert")
+            .setMessage(
+                "${err.msg}. Cicero bruger nu: ${err.found}\n\n" +
+                    "Ret det i Cicero under Enhedsindstillinger → RFID scanner:\n" +
+                    "Scanner: Deichman\n" +
+                    "Hostname: localhost (uden mellemrum)\n" +
+                    "Port: ${Server.PORT}\n\n" +
+                    "Tryk Test forbindelse og gem. Beskeden forsvinder, når Cicero bruger den rigtige adresse.",
             )
             .setPositiveButton("OK", null)
             .show()
@@ -551,10 +624,13 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             // Usikre (http) forbindelser er kun tilladt til app'ens egen server på localhost
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                 val u = request.url
-                if (u.scheme?.lowercase() != "http") return null
-                val h = u.host?.lowercase() ?: ""
-                if (h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "[::1]") return null
-                if (blockedHosts.add(h)) LogBuf.add("Blokeret usikker forbindelse til $h")
+                val scheme = u.scheme?.lowercase()
+                // Afkod, så fx et mellemrum (%20) i Ciceros Hostname-felt kan ses
+                val h = Uri.decode(u.host ?: "").lowercase()
+                checkRfidSetup(u, scheme, h)
+                if (scheme != "http") return null
+                if (h in LOCAL_HOSTS) return null
+                if (blockedHosts.add(h)) LogBuf.add("Blokeret usikker forbindelse til '$h'")
                 return WebResourceResponse(
                     "text/plain", "utf-8", 403, "Forbidden",
                     emptyMap(), java.io.ByteArrayInputStream(ByteArray(0)),
@@ -725,6 +801,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             Server.bindError != null -> Server.bindError
             else -> null
         }
+        val setup = if (problem == null) setupError else null
         val fb = Hub.feedback
 
         // Bjælken forbliver neutral; en lille farvet pille bærer budskabet
@@ -734,6 +811,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         var text = ""
         if (problem != null) {
             pillColor = red; pillIconRes = R.drawable.ic_warn; pillWords = problem
+        } else if (setup != null) {
+            // Kort pille, selve fejlen i teksten ved siden af; tryk for vejledning
+            pillColor = red; pillIconRes = R.drawable.ic_warn; pillWords = "Ret Cicero"
+            text = setup.msg
         } else {
             when (fb) {
                 Hub.Fb.IDLE -> text = if (listening) "Klar" else ""
@@ -775,7 +856,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         }
         status.text = text
         status.setTextColor(pal.text)
-        detail.text = if (problem == null && fb != Hub.Fb.IDLE) Hub.statusDetail else ""
+        detail.text = when {
+            setup != null -> "står: ${setup.found}"
+            problem == null && fb != Hub.Fb.IDLE -> Hub.statusDetail
+            else -> ""
+        }
         detail.setTextColor(pal.sub)
 
         // Samme ikon som Ciceros egen RFID-knap: blå når Cicero lytter, grå og overstreget når ikke
@@ -870,11 +955,6 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             .show()
     }
 
-    private fun openNfcSettingsIfOff() {
-        val n = nfc ?: return
-        if (!n.isEnabled) startActivity(Intent(Settings.ACTION_NFC_SETTINGS))
-    }
-
     /** Åbn uden for app'en (Chrome, mail, telefon …). Web-indhold får aldrig lov at starte en bestemt app direkte. */
     private fun openExternal(url: String) {
         try {
@@ -918,3 +998,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         startActivity(Intent.createChooser(i, "Del log"))
     }
 }
+
+private val LOCAL_HOSTS = setOf("localhost", "127.0.0.1", "::1", "[::1]")
+
+/** De adresser, Cicero kalder på en Deichman-RFID-læser */
+private val RFID_PATHS = setOf(
+    "/.status", "/events", "/events/", "/start", "/stop", "/scan",
+    "/alarmOn", "/alarmOff", "/write", "/writetagbarcode",
+)
