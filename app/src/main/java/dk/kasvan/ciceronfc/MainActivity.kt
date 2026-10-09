@@ -282,7 +282,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             setPadding(0, dp(16), 0, dp(4))
         }
         lockHint = TextView(this).apply {
-            text = "Tryk for at låse op"
+            // Versionen står her, så den er nem at finde, når man skal have hjælp
+            text = "Tryk for at låse op\n\nCicero NFC ${BuildConfigInfo.version(this@MainActivity)}"
             textSize = 14f
             gravity = Gravity.CENTER
         }
