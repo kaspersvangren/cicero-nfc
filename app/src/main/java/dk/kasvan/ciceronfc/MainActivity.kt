@@ -509,8 +509,6 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             setSupportZoom(true)
             builtInZoomControls = true
             displayZoomControls = false
-            // Ser ud som almindelig Chrome, ikke som en indlejret browser
-            userAgentString = userAgentString.replace("; wv", "")
         }
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
