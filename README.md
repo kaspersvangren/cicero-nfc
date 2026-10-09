@@ -1,15 +1,21 @@
 # Cicero NFC
 
-Android-app der gør telefonens NFC til RFID-læser for Cicero Mobile.
+Android-app, der gør telefonens NFC til RFID-læser i Cicero Mobile.
 
-App'en viser Cicero Mobile og kører samtidig en lille server på
-`localhost:1667`, der svarer som Deichmans RFID-program
-[go-feig](https://github.com/digibib/go-feig). Cicero bruger det, når man
-vælger **Deichman** som RFID-scanner.
+App'en viser Cicero Mobile i Androids indbyggede webvisning (samme motor som Chrome)
+og kører ved siden af en lille lokal RFID-server på `localhost:1667`. Serveren taler
+samme protokol som Deichmans open source RFID-program
+[go-feig](https://github.com/digibib/go-feig), som Cicero understøtter under
+RFID-scanneren **Deichman**.
+
+Designet og testet af Kasper Svangren, Gladsaxe Bibliotekerne. Kodet med AI-assistance (Claude).
 
 ## Hent
 
 Seneste version: [CiceroNFC.apk](https://github.com/kaspersvangren/cicero-nfc/releases/latest/download/CiceroNFC.apk)
+
+Kræver Android 8 eller nyere med NFC. Testet på Motorola Edge 50 Fusion (Android 16)
+med NXP ICODE SLIX og SLIX2-tags.
 
 ## Opsætning i Cicero Mobile (inde i app'en)
 
@@ -17,23 +23,50 @@ Enhedsindstillinger → RFID scanner:
 - Scanner: **Deichman**
 - Hostname: **localhost**
 - Port: **1667**
+- Slå **"RFID-scanner til som standard"** til
 
 ## Brug
 
-Hold bogen mod bagsiden af telefonen, til den summer kort (læst). Ved
-udlån og aflevering summer den langt, når alarmen er skiftet – først da
-må bogen fjernes.
+Hold bogen mod bagsiden af telefonen:
 
-## Hvad den kan
+| Signal | Betyder | Vibration |
+|---|---|---|
+| "Hold stille" | bogen er læst, Cicero arbejder | kort tik |
+| Grøn pille, overstreget klokke | alarm slået fra (udlån) | to korte |
+| Orange pille, klokke | alarm slået til (aflevering) | én lang |
+| Rød pille | fejl, fx bogen fjernet for tidligt | tre hurtige |
+| Grå pille, flueben | læst på en side uden alarmskift | – |
+
+## Data og sikkerhed
+
+- App'en gemmer kun det samme som en almindelig browser (login, mellemlager) samt om
+  Cicero vises lyst eller mørkt. Den sender selv ingen data nogen steder hen; al trafik
+  ud af telefonen er Cicero Mobiles egen.
+- Loggen (materialenumre og RFID-kommandoer) ligger kun i hukommelsen og forsvinder,
+  når app'en lukkes. Den skrives ikke til telefonens systemlog.
+- Intet følger med til skyen eller en ny telefon.
+- App'en låser sig efter 5 minutter uden brug og ved opstart. Den låses op med telefonens
+  egen skærmlås (fingeraftryk, ansigt eller pinkode). Mens den er låst, er Cicero skjult,
+  og bøger hverken læses eller ændres.
+- Den lokale server svarer kun forespørgsler fra Cicero Mobile
+  (`https://cicero.systematic.com`) rettet til localhost.
+- Kameraet (scanning af lånerkort) gives kun til Ciceros egen side.
+- Links, der åbner et nyt vindue, åbnes i telefonens browser.
+
+## Protokol
 
 | Cicero kalder | App'en gør |
 |---|---|
 | `/.status` | svarer med status (test forbindelse) |
 | `/events/` | sender `addTag`/`removeTag`, når en bog holdes mod / fjernes fra telefonen |
 | `/scan` | returnerer bogen ved telefonen |
+| `/start`, `/stop` | Cicero begynder/holder op med at lytte |
 | `/alarmOn`, `/alarmOff` | sætter AFI til 0x07 (sikret) / 0xC2 (udlånt) |
-| `/write?barcode=` | programmerer tagget efter den danske datamodel |
-
-Knappen **Log** viser alt hvad Cicero beder om, og **Del** sender loggen videre.
+| `/write?barcode=` | programmerer tagget efter den danske RFID-datamodel |
 
 Protokollen er genskabt ud fra go-feig (MIT-licens, Deichman bibliotek, Oslo).
+Der er ikke kopieret kode fra go-feig.
+
+## Licens
+
+Endnu ikke valgt.
