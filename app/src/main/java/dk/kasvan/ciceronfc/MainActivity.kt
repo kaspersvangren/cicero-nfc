@@ -39,6 +39,7 @@ import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -97,6 +98,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private lateinit var updateBtn: TextView
     private lateinit var updateBg: GradientDrawable
     private var updateAfterPermission = false
+    private val blockedHosts = java.util.Collections.synchronizedSet(HashSet<String>())
     private lateinit var progress: ProgressBar
     private lateinit var flash: View
     private lateinit var logScroll: ScrollView
@@ -519,8 +521,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             domStorageEnabled = true
             @Suppress("DEPRECATION")
             databaseEnabled = true
-            // Ciceros sikre side må ikke hente usikre scripts. localhost (vores egen server) er undtaget af browseren.
-            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            // Browserens egen regel for usikkert indhold varierer mellem telefoner (localhost blev blokeret
+            // på nogle). Derfor tillader browseren det, og app'en blokerer selv alt usikkert undtagen
+            // vores egen RFID-server – se shouldInterceptRequest.
+            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             // Links der åbner et nyt vindue (fx Netpunkt, Google) åbnes i Chrome i stedet for inde i app'en
             setSupportMultipleWindows(true)
             loadWithOverviewMode = true
@@ -542,6 +546,19 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 if (scheme == "http" || scheme == "https") return false
                 openExternal(request.url.toString())
                 return true
+            }
+
+            // Usikre (http) forbindelser er kun tilladt til app'ens egen server på localhost
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                val u = request.url
+                if (u.scheme?.lowercase() != "http") return null
+                val h = u.host?.lowercase() ?: ""
+                if (h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "[::1]") return null
+                if (blockedHosts.add(h)) LogBuf.add("Blokeret usikker forbindelse til $h")
+                return WebResourceResponse(
+                    "text/plain", "utf-8", 403, "Forbidden",
+                    emptyMap(), java.io.ByteArrayInputStream(ByteArray(0)),
+                )
             }
 
             override fun onPageFinished(view: WebView, url: String) {
