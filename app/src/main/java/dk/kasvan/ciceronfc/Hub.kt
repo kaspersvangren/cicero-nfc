@@ -56,6 +56,10 @@ object Hub {
     private var pingFails = 0
     private var lastLibrary = DEFAULT_LIBRARY
 
+    /** Låst = Cicero er dækket og bøger læses ikke. Låst fra start, så login ikke kan bruges af andre. */
+    @Volatile var locked = true
+    @Volatile var lastActivity = 0L
+
     @Volatile var mode = "IDLE"
     @Volatile var statusText = ""
         private set
@@ -138,6 +142,13 @@ object Hub {
     // ---------- NFC ----------
 
     fun onTagDiscovered(tag: Tag) {
+        // Låst: ellers kunne man fx aflevere bøger uden at låse op
+        if (locked) {
+            LogBuf.add("Bog ignoreret – app'en er låst")
+            buzz(longArrayOf(0, 80, 70, 80, 70, 80))
+            return
+        }
+        lastActivity = SystemClock.elapsedRealtime()
         exec.execute { handleNewTag(tag) }
     }
 

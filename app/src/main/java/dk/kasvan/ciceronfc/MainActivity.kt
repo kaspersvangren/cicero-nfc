@@ -2,6 +2,7 @@ package dk.kasvan.ciceronfc
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.KeyguardManager
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -11,15 +12,20 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Build
 import android.os.Bundle
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.text.TextUtils
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsetsController
 import android.view.WindowManager
@@ -44,6 +50,9 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
     companion object {
         const val START_URL = "https://cicero.systematic.com/"
+
+        /** App'en låser sig efter 5 minutter uden brug. */
+        const val LOCK_AFTER_MS = 5 * 60 * 1000L
     }
 
     /** Cicero Mobiles egne farver (målt på skærmbilleder af Cicero). */
@@ -93,6 +102,13 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private var lastSeq = -1
     private var pendingCamera: PermissionRequest? = null
     private val cameraRequestCode = 42
+    private val unlockRequestCode = 43
+    private lateinit var lockView: LinearLayout
+    private lateinit var lockIcon: ImageView
+    private lateinit var lockTitle: TextView
+    private lateinit var lockHint: TextView
+    private var authInProgress = false
+    private var lastAuthEnded = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,13 +121,18 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             "light" -> lightPalette
             else -> if (night) darkPalette else lightPalette
         }
-        // Skærmen slukker ikke, mens app'en er åben ved skranken
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Miniaturen i "seneste apps" viser ikke Cicero (almindelige skærmbilleder virker stadig)
+        if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
         buildLayout()
         setupWeb(savedInstanceState)
         LogBuf.listener = { runOnUiThread { refreshLog() } }
         Hub.statusListener = { runOnUiThread { refreshStatus() } }
         refreshStatus()
+        if (!isDeviceSecure()) {
+            Hub.locked = false
+            if (savedInstanceState == null) warnNoScreenLock()
+        }
+        refreshLockUi()
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -218,8 +239,147 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             logScroll,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.4).toInt()),
         )
-        setContentView(root)
+        lockView = buildLockView()
+        val container = FrameLayout(this).apply {
+            addView(root, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(lockView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+        setContentView(container)
         applyPalette()
+    }
+
+    // ---------- Lås ----------
+
+    private fun buildLockView(): LinearLayout {
+        lockIcon = ImageView(this).apply { setImageResource(R.drawable.ic_lock) }
+        lockTitle = TextView(this).apply {
+            text = "Cicero NFC er låst"
+            textSize = 18f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(16), 0, dp(4))
+        }
+        lockHint = TextView(this).apply {
+            text = "Tryk for at låse op"
+            textSize = 14f
+            gravity = Gravity.CENTER
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            isClickable = true // tryk må ikke gå igennem til Cicero
+            visibility = View.GONE
+            setOnClickListener { authenticate() }
+            addView(lockIcon, LinearLayout.LayoutParams(dp(56), dp(56)))
+            addView(lockTitle)
+            addView(lockHint)
+        }
+    }
+
+    private fun isDeviceSecure(): Boolean = getSystemService(KeyguardManager::class.java)?.isDeviceSecure == true
+
+    private fun warnNoScreenLock() {
+        AlertDialog.Builder(this)
+            .setTitle("Ingen skærmlås")
+            .setMessage("Telefonen har ingen skærmlås (fingeraftryk eller pinkode), så Cicero NFC kan ikke låse sig selv. Slå skærmlås til i telefonens indstillinger.")
+            .setPositiveButton("Indstillinger") { _, _ -> startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }
+            .setNegativeButton("OK", null)
+            .show()
+    }
+
+    private fun lock() {
+        if (!isDeviceSecure()) return
+        if (!Hub.locked) LogBuf.add("Låst")
+        Hub.locked = true
+        refreshLockUi()
+    }
+
+    private fun unlock() {
+        Hub.locked = false
+        Hub.lastActivity = SystemClock.elapsedRealtime()
+        LogBuf.add("Låst op")
+        refreshLockUi()
+    }
+
+    private fun refreshLockUi() {
+        val locked = Hub.locked
+        lockView.visibility = if (locked) View.VISIBLE else View.GONE
+        // Skærmen holdes kun tændt, mens app'en er låst op; låst må telefonen slukke som normalt
+        if (locked) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    /** Telefonens egen skærmlås: fingeraftryk, ansigt eller pinkode. App'en ser aldrig selve koden. */
+    private fun authenticate() {
+        if (authInProgress) return
+        if (!isDeviceSecure()) { unlock(); return }
+        authInProgress = true
+        if (Build.VERSION.SDK_INT >= 30) {
+            val prompt = BiometricPrompt.Builder(this)
+                .setTitle("Lås Cicero NFC op")
+                .setAllowedAuthenticators(
+                    BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+                )
+                .build()
+            prompt.authenticate(
+                CancellationSignal(), mainExecutor,
+                object : BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                        authEnded()
+                        unlock()
+                    }
+
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                        authEnded()
+                    }
+                },
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            val i = getSystemService(KeyguardManager::class.java)?.createConfirmDeviceCredentialIntent("Lås Cicero NFC op", null)
+            if (i == null) {
+                authEnded()
+                unlock()
+                return
+            }
+            @Suppress("DEPRECATION")
+            startActivityForResult(i, unlockRequestCode)
+        }
+    }
+
+    private fun authEnded() {
+        authInProgress = false
+        lastAuthEnded = SystemClock.elapsedRealtime()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != unlockRequestCode) return
+        authEnded()
+        if (resultCode == RESULT_OK) unlock()
+    }
+
+    /** Ethvert tryk tæller som brug */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (!Hub.locked) Hub.lastActivity = SystemClock.elapsedRealtime()
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private val lockTicker = object : Runnable {
+        override fun run() {
+            if (!resumed) return
+            if (!Hub.locked && isDeviceSecure() &&
+                SystemClock.elapsedRealtime() - Hub.lastActivity >= LOCK_AFTER_MS
+            ) {
+                lock()
+            }
+            handler.postDelayed(this, 10_000)
+        }
     }
 
     private fun applyPalette() {
@@ -227,6 +387,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         progress.progressTintList = ColorStateList.valueOf(pal.blue)
         progress.progressBackgroundTintList = ColorStateList.valueOf(pal.line)
         logView.setTextColor(pal.logText)
+        lockView.setBackgroundColor(pal.bar)
+        lockIcon.imageTintList = ColorStateList.valueOf(pal.text)
+        lockTitle.setTextColor(pal.text)
+        lockHint.setTextColor(pal.sub)
         logScroll.setBackgroundColor(pal.logBg)
         divider.setBackgroundColor(pal.line)
         refreshStatus()
@@ -282,6 +446,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         m.menu.add(0, 1, 0, if (logScroll.visibility == View.VISIBLE) "Skjul log" else "Vis log")
         m.menu.add(0, 2, 1, "Del log")
         m.menu.add(0, 3, 2, "Genindlæs Cicero")
+        if (isDeviceSecure()) m.menu.add(0, 6, 3, "Lås nu")
         m.menu.add(0, 4, 4, "Om Cicero NFC")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
@@ -289,6 +454,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 2 -> shareLog()
                 3 -> web.reload()
                 4 -> showAbout()
+                6 -> lock()
             }
             true
         }
@@ -303,7 +469,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     "Opsætning i Cicero (Enhedsindstillinger → RFID scanner):\n" +
                     "Deichman · localhost · 1667\n" +
                     "Slå \"RFID-scanner til som standard\" til.\n\n" +
-                    "Hold bogen mod telefonen, til den bipper og bjælken bliver grøn.",
+                    "Hold bogen mod telefonen, til den vibrerer og pillen viser alarm fra/til.\n\n" +
+                    "App'en låser sig efter 5 minutter uden brug og låses op med telefonens fingeraftryk eller pinkode.",
             )
             .setPositiveButton("OK", null)
             .show()
@@ -412,6 +579,17 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
     override fun onResume() {
         super.onResume()
+        // Lås, hvis app'en ikke har været brugt i 5 minutter (også mens den var i baggrunden)
+        if (isDeviceSecure()) {
+            if (!Hub.locked && SystemClock.elapsedRealtime() - Hub.lastActivity >= LOCK_AFTER_MS) lock()
+            refreshLockUi()
+            if (Hub.locked && !authInProgress && SystemClock.elapsedRealtime() - lastAuthEnded > 1500) authenticate()
+        } else if (Hub.locked) {
+            Hub.locked = false
+            refreshLockUi()
+        }
+        handler.removeCallbacks(lockTicker)
+        handler.postDelayed(lockTicker, 10_000)
         val opts = Bundle().apply { putInt(NfcAdapter.EXTRA_READER_PRESENCE_CHECK_DELAY, 500) }
         nfc?.enableReaderMode(
             this, this,
@@ -428,6 +606,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         super.onPause()
         resumed = false
         handler.removeCallbacks(themeTicker)
+        handler.removeCallbacks(lockTicker)
         nfc?.disableReaderMode(this)
         CookieManager.getInstance().flush()
     }
