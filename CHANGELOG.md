@@ -1,6 +1,6 @@
 # Ændringer
 
-- **Næste version** – Ændringslisten ligger i menuen ⋮ → Ændringer, og efter en opdatering viser app'en, hvad der er nyt.
+- **0.1.27** – Ændringslisten ligger i menuen ⋮ → Ændringer, og efter en opdatering viser app'en, hvad der er nyt.
 - **0.1.26** – Forkert Hostname/Port i Cicero vises som "RFID-fejl" (begge, hvis begge er forkerte). Opdateringen viser, hvad der er nyt.
 - **0.1.25** – Tydelig fejlbesked ved forkert RFID-opsætning i Cicero. Licenser og tak til Deichman under Om.
 - **0.1.24** – RFID-forbindelsen virker uanset telefonens browserversion.
