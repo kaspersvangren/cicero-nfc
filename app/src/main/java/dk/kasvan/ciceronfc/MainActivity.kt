@@ -94,6 +94,9 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private lateinit var pillText: TextView
     private lateinit var detail: TextView
     private lateinit var menuBtn: TextView
+    private lateinit var updateBtn: TextView
+    private lateinit var updateBg: GradientDrawable
+    private var updateAfterPermission = false
     private lateinit var progress: ProgressBar
     private lateinit var flash: View
     private lateinit var logScroll: ScrollView
@@ -131,6 +134,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         setupWeb(savedInstanceState)
         LogBuf.listener = { runOnUiThread { refreshLog() } }
         Hub.statusListener = { runOnUiThread { refreshStatus() } }
+        Updater.listener = { runOnUiThread { refreshStatus() } }
+        if (savedInstanceState == null) Updater.cleanup(this)
         refreshStatus()
         if (!isDeviceSecure()) {
             Hub.locked = false
@@ -199,6 +204,19 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             setPadding(dp(4), 0, dp(2), 0)
         }
         bar.addView(detail)
+
+        // Vises kun, når der findes en nyere version
+        updateBg = GradientDrawable().apply { cornerRadius = dp(12).toFloat() }
+        updateBtn = TextView(this).apply {
+            textSize = 12f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = updateBg
+            setPadding(dp(10), dp(3), dp(10), dp(3))
+            visibility = View.GONE
+            setOnClickListener { startUpdate() }
+        }
+        bar.addView(updateBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6) })
 
         menuBtn = TextView(this).apply {
             text = "⋮"
@@ -460,6 +478,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         m.menu.add(0, 2, 1, "Del log")
         m.menu.add(0, 3, 2, "Genindlæs Cicero")
         if (isDeviceSecure()) m.menu.add(0, 6, 3, "Lås nu")
+        m.menu.add(0, 7, 4, "Søg efter opdatering")
         m.menu.add(0, 4, 4, "Om Cicero NFC")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
@@ -468,6 +487,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 3 -> web.reload()
                 4 -> showAbout()
                 6 -> lock()
+                7 -> checkForUpdateNow()
             }
             true
         }
@@ -483,7 +503,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     "Deichman · localhost · 1667\n" +
                     "Slå \"RFID-scanner til som standard\" til.\n\n" +
                     "Hold bogen mod telefonen, til den vibrerer og pillen viser alarm fra/til.\n\n" +
-                    "App'en låser sig efter 5 minutter uden brug og låses op med telefonens fingeraftryk eller pinkode.",
+                    "App'en låser sig efter 5 minutter uden brug og låses op med telefonens fingeraftryk eller pinkode.\n\n" +
+                    "App'en tjekker GitHub for nye versioner (højst hver 6. time). Der sendes ingen data.",
             )
             .setPositiveButton("OK", null)
             .show()
@@ -634,6 +655,12 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         }
         handler.removeCallbacks(lockTicker)
         handler.postDelayed(lockTicker, 10_000)
+        Updater.check(this)
+        // Kommer tilbage fra "Tillad installation af apps" – fortsæt opdateringen
+        if (updateAfterPermission && packageManager.canRequestPackageInstalls()) {
+            updateAfterPermission = false
+            confirmUpdate()
+        }
         val opts = Bundle().apply { putInt(NfcAdapter.EXTRA_READER_PRESENCE_CHECK_DELAY, 500) }
         nfc?.enableReaderMode(
             this, this,
@@ -705,6 +732,21 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         setSystemBar(pal.bar, light = pal.lightBar)
         menuBtn.setTextColor(pal.sub)
 
+        val upd = Updater.available
+        val prog = Updater.progress
+        when {
+            prog >= 0 -> {
+                updateBtn.text = "Henter $prog %"
+                updateBtn.visibility = View.VISIBLE
+            }
+            upd != null -> {
+                updateBtn.text = "Ny version"
+                updateBtn.visibility = View.VISIBLE
+            }
+            else -> updateBtn.visibility = View.GONE
+        }
+        updateBg.setColor(pal.blue)
+
         if (pillColor != null) {
             pillBg.setColor(pillColor)
             pillIcon.setImageResource(pillIconRes)
@@ -758,6 +800,56 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 v.systemUiVisibility and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
             }
         }
+    }
+
+    // ---------- Opdatering ----------
+
+    private fun checkForUpdateNow() {
+        Updater.check(this, force = true) { info, error ->
+            runOnUiThread {
+                when {
+                    info != null -> startUpdate()
+                    error != null -> AlertDialog.Builder(this)
+                        .setTitle("Kunne ikke tjekke for opdatering")
+                        .setMessage(error)
+                        .setPositiveButton("OK", null).show()
+                    else -> AlertDialog.Builder(this)
+                        .setTitle("Ingen ny version")
+                        .setMessage("Du har den nyeste version (${BuildConfigInfo.version(this)}).")
+                        .setPositiveButton("OK", null).show()
+                }
+            }
+        }
+    }
+
+    private fun startUpdate() {
+        if (Updater.available == null || Updater.progress >= 0) return
+        if (!packageManager.canRequestPackageInstalls()) {
+            AlertDialog.Builder(this)
+                .setTitle("Tillad opdateringer")
+                .setMessage(
+                    "For at kunne opdatere sig selv skal Cicero NFC have lov til at installere apps. " +
+                        "Det skal kun gøres én gang.\n\nSlå \"Tillad fra denne kilde\" til og tryk tilbage.",
+                )
+                .setPositiveButton("Giv lov") { _, _ ->
+                    updateAfterPermission = true
+                    startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, android.net.Uri.parse("package:$packageName")))
+                }
+                .setNegativeButton("Ikke nu", null)
+                .show()
+            return
+        }
+        confirmUpdate()
+    }
+
+    private fun confirmUpdate() {
+        val info = Updater.available ?: return
+        AlertDialog.Builder(this)
+            .setTitle("Opdater til ${info.name}?")
+            .setMessage("App'en henter den nye version fra GitHub. Android spørger derefter, om du vil opdatere. Login og opsætning bevares.")
+            .setPositiveButton("Opdater") { _, _ -> Updater.downloadAndInstall(this, info) }
+            .setNegativeButton("Ikke nu", null)
+            .show()
     }
 
     private fun openNfcSettingsIfOff() {

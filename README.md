@@ -41,10 +41,13 @@ Hold bogen mod bagsiden af telefonen:
 
 - App'en gemmer kun det samme som en almindelig browser (login, mellemlager) samt om
   Cicero vises lyst eller mørkt. Den sender selv ingen data nogen steder hen; al trafik
-  ud af telefonen er Cicero Mobiles egen.
+  ud af telefonen er Cicero Mobiles egen, bortset fra opdateringstjekket nedenfor.
 - Loggen (materialenumre og RFID-kommandoer) ligger kun i hukommelsen og forsvinder,
   når app'en lukkes. Den skrives ikke til telefonens systemlog.
 - Intet følger med til skyen eller en ny telefon.
+- App'en tjekker GitHub for nye versioner (højst hver 6. time) og tilbyder at opdatere sig selv.
+  Der sendes ingen data; den spørger kun efter seneste version. Android installerer kun en
+  opdatering med samme digitale segl som den installerede app.
 - App'en låser sig efter 5 minutter uden brug og ved opstart. Den låses op med telefonens
   egen skærmlås (fingeraftryk, ansigt eller pinkode). Mens den er låst, er Cicero skjult,
   og bøger hverken læses eller ændres.
