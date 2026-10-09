@@ -3,7 +3,7 @@ name: Byg app
 on:
   push:
     branches: [main]
-    paths-ignore: ['README.md']
+    paths-ignore: ['README.md', 'CHANGELOG.md']
   workflow_dispatch:
 
 permissions:
@@ -59,9 +59,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app/build/outputs/apk/release/app-release.apk CiceroNFC.apk
+          # Ændringslisten er commit-beskeden (uden Co-Authored-By og lignende linjer)
+          git log -1 --format=%B | grep -v -E '^(Co-Authored-By|Claude-Session|Signed-off-by):' > notes.txt
+          printf '\nBygget fra %s\n' "${GITHUB_SHA::7}" >> notes.txt
           gh release create "v0.1.${{ github.run_number }}" CiceroNFC.apk \
             --title "Cicero NFC 0.1.${{ github.run_number }}" \
-            --notes "Bygget fra ${GITHUB_SHA::7}" --latest
+            --notes-file notes.txt --latest
 
       - name: Gem byggelog (til fejlfinding)
         if: always()

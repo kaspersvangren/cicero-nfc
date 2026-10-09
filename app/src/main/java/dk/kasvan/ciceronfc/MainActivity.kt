@@ -102,7 +102,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private val blockedHosts = java.util.Collections.synchronizedSet(HashSet<String>())
 
     /** Fejl i Ciceros RFID-opsætning (Hostname/Port), opdaget når Cicero prøver at forbinde. */
-    private data class SetupError(val msg: String, val found: String)
+    private data class SetupError(val text: String, val details: List<String>)
     @Volatile private var setupError: SetupError? = null
     private lateinit var progress: ProgressBar
     private lateinit var flash: View
@@ -548,17 +548,29 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         if (path !in RFID_PATHS) return
         if (host == "systematic.com" || host.endsWith(".systematic.com")) return
         val port = if (u.port != -1) u.port else if (scheme == "https") 443 else 80
-        val err = when {
-            host !in LOCAL_HOSTS && host.trim() in LOCAL_HOSTS ->
-                SetupError("Fjern mellemrum i Hostname", "'$host'")
-            host !in LOCAL_HOSTS -> SetupError("Hostname skal være localhost", "'$host'")
-            port != Server.PORT -> SetupError("Port skal være ${Server.PORT}", "$port")
+        // Tjek både Hostname og Port – begge kan være forkerte på én gang
+        val details = ArrayList<String>()
+        val hostBad = host !in LOCAL_HOSTS
+        val portBad = port != Server.PORT
+        if (hostBad) {
+            details += if (host.trim() in LOCAL_HOSTS) {
+                "Hostname har et mellemrum: '$host'"
+            } else {
+                "Hostname er '$host' – skal være localhost"
+            }
+        }
+        if (portBad) details += "Port er $port – skal være ${Server.PORT}"
+        val text = when {
+            hostBad && portBad -> "Fejl i Hostname/Port"
+            hostBad -> "Fejl i Hostname"
+            portBad -> "Fejl i Port"
             else -> null
         }
+        val err = text?.let { SetupError(it, details) }
         if (err == setupError) return
         setupError = err
         if (err != null) {
-            LogBuf.add("RFID-opsætning i Cicero er forkert: ${err.msg} (står: ${err.found})")
+            LogBuf.add("RFID-opsætning i Cicero er forkert: ${details.joinToString("; ")}")
         } else {
             LogBuf.add("RFID-opsætning i Cicero er rettet")
         }
@@ -575,7 +587,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         AlertDialog.Builder(this)
             .setTitle("RFID-opsætningen i Cicero er forkert")
             .setMessage(
-                "${err.msg}. Cicero bruger nu: ${err.found}\n\n" +
+                err.details.joinToString("\n") + "\n\n" +
                     "Ret det i Cicero under Enhedsindstillinger → RFID scanner:\n" +
                     "Scanner: Deichman\n" +
                     "Hostname: localhost (uden mellemrum)\n" +
@@ -813,8 +825,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             pillColor = red; pillIconRes = R.drawable.ic_warn; pillWords = problem
         } else if (setup != null) {
             // Kort pille, selve fejlen i teksten ved siden af; tryk for vejledning
-            pillColor = red; pillIconRes = R.drawable.ic_warn; pillWords = "Ret Cicero"
-            text = setup.msg
+            pillColor = red; pillIconRes = R.drawable.ic_warn; pillWords = "RFID-fejl"
+            text = setup.text
         } else {
             when (fb) {
                 Hub.Fb.IDLE -> text = if (listening) "Klar" else ""
@@ -857,7 +869,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         status.text = text
         status.setTextColor(pal.text)
         detail.text = when {
-            setup != null -> "står: ${setup.found}"
+            setup != null -> ""
             problem == null && fb != Hub.Fb.IDLE -> Hub.statusDetail
             else -> ""
         }
@@ -949,7 +961,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         val info = Updater.available ?: return
         AlertDialog.Builder(this)
             .setTitle("Opdater til ${info.name}?")
-            .setMessage("App'en henter den nye version fra GitHub. Android spørger derefter, om du vil opdatere. Login og opsætning bevares.")
+            .setMessage(
+                (if (info.notes.isNotEmpty()) "Nyt:\n${info.notes}\n\n" else "") +
+                    "App'en henter den nye version fra GitHub. Android spørger derefter, om du vil opdatere. Login og opsætning bevares.",
+            )
             .setPositiveButton("Opdater") { _, _ -> Updater.downloadAndInstall(this, info) }
             .setNegativeButton("Ikke nu", null)
             .show()

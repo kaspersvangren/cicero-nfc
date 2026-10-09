@@ -36,7 +36,7 @@ Hold bogen mod bagsiden af telefonen:
 | Orange pille, klokke | alarm slået til (aflevering) | én lang |
 | Rød pille | fejl, fx bogen fjernet for tidligt | tre hurtige |
 | Grå pille, flueben | læst på en side uden alarmskift | – |
-| Rød pille "Ret Cicero" | Hostname eller Port i Ciceros RFID-opsætning er forkert (fx mellemrum); tryk for vejledning | – |
+| Rød pille "RFID-fejl" | Hostname og/eller Port i Ciceros RFID-opsætning er forkert (fx et mellemrum); tryk for vejledning | – |
 
 ## Data og sikkerhed
 
@@ -70,6 +70,10 @@ Hold bogen mod bagsiden af telefonen:
 
 Protokollen er genskabt ud fra go-feig (MIT-licens, Deichman bibliotek, Oslo).
 Der er ikke kopieret kode fra go-feig.
+
+## Ændringer
+
+Se [CHANGELOG.md](CHANGELOG.md).
 
 ## Licens
 

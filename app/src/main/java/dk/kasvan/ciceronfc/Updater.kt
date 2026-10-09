@@ -25,7 +25,7 @@ object Updater {
     private const val DOWNLOAD_PREFIX = "https://github.com/kaspersvangren/cicero-nfc/releases/download/"
     private const val CHECK_EVERY_MS = 6 * 60 * 60 * 1000L
 
-    class Info(val code: Long, val name: String, val url: String)
+    class Info(val code: Long, val name: String, val url: String, val notes: String)
 
     @Volatile var available: Info? = null
         private set
@@ -73,7 +73,11 @@ object Updater {
                     if (a.getString("name") == "CiceroNFC.apk") url = a.getString("browser_download_url")
                 }
                 if (url == null || !url.startsWith(DOWNLOAD_PREFIX)) throw IOException("ingen app-fil i udgivelsen")
-                available = if (code > currentCode(app)) Info(code, tag.removePrefix("v"), url) else null
+                // Kort ændringsliste fra udgivelsen (uden byggelinjen), højst 600 tegn
+                val notes = j.optString("body", "").lines()
+                    .filterNot { it.startsWith("Bygget fra") }
+                    .joinToString("\n").trim().take(600)
+                available = if (code > currentCode(app)) Info(code, tag.removePrefix("v"), url, notes) else null
                 available?.let { LogBuf.add("Ny version fundet: ${it.name}") }
             } catch (e: Exception) {
                 error = e.message ?: "ukendt fejl"
