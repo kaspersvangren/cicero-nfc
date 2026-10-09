@@ -28,7 +28,7 @@ object LogBuf {
                 while (lines.size > 1000) lines.removeFirst()
             }
         }
-        android.util.Log.i("CiceroNFC", msg)
+        // Bevidst ikke skrevet til telefonens systemlog (logcat)
         listener?.invoke()
     }
 

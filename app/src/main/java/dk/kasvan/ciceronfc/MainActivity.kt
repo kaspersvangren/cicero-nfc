@@ -4,7 +4,9 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.KeyguardManager
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -21,6 +23,7 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
 import android.os.SystemClock
 import android.provider.Settings
 import android.text.TextUtils
@@ -29,6 +32,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.webkit.ConsoleMessage
 import android.webkit.PermissionRequest
 import android.webkit.CookieManager
@@ -291,6 +295,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         if (!isDeviceSecure()) return
         if (!Hub.locked) LogBuf.add("Låst")
         Hub.locked = true
+        Hub.onLocked()
         refreshLockUi()
     }
 
@@ -304,6 +309,14 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private fun refreshLockUi() {
         val locked = Hub.locked
         lockView.visibility = if (locked) View.VISIBLE else View.GONE
+        // Cicero skjules helt bag låsen – også for skærmlæser og tastatur
+        root.visibility = if (locked) View.INVISIBLE else View.VISIBLE
+        root.importantForAccessibility =
+            if (locked) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS else View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        if (locked) {
+            web.clearFocus()
+            getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(root.windowToken, 0)
+        }
         // Skærmen holdes kun tændt, mens app'en er låst op; låst må telefonen slukke som normalt
         if (locked) {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -477,13 +490,17 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     }
 
     private fun setupWeb(saved: Bundle?) {
-        WebView.setWebContentsDebuggingEnabled(true)
+        // Fjernfejlsøgning (chrome://inspect) kun i fejlsøgnings-builds, aldrig i den rigtige app
+        WebView.setWebContentsDebuggingEnabled((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0)
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
             @Suppress("DEPRECATION")
             databaseEnabled = true
-            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            // Ciceros sikre side må ikke hente usikre scripts. localhost (vores egen server) er undtaget af browseren.
+            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            // Links der åbner et nyt vindue (fx Netpunkt, Google) åbnes i Chrome i stedet for inde i app'en
+            setSupportMultipleWindows(true)
             loadWithOverviewMode = true
             useWideViewPort = true
             // Ciceros kamerascanning skal kunne vise kamerabilledet uden ekstra tryk
@@ -499,7 +516,13 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
 
         web.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = false
+            // Almindelige web-adresser (Cicero, login) bliver i app'en; andet (mailto:, tel:, apps) åbnes udenfor
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                val scheme = request.url.scheme?.lowercase() ?: return true
+                if (scheme == "http" || scheme == "https") return false
+                openExternal(request.url.toString())
+                return true
+            }
 
             override fun onPageFinished(view: WebView, url: String) {
                 handler.postDelayed({ detectCiceroTheme() }, 500)
@@ -510,15 +533,16 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 // Når Cicero selv lukker /events/ ved skærmskift, melder browseren ERR_FAILED – det er ikke en fejl
                 val closedEvents = url.contains("/events") && (error.description?.contains("ERR_FAILED") == true)
                 if (!closedEvents && (request.isForMainFrame || url.contains(":${Server.PORT}"))) {
-                    LogBuf.add("Browser-fejl: ${error.description} ($url)")
+                    // Kun værtsnavnet – fulde adresser kan indeholde lånerdata
+                    LogBuf.add("Browser-fejl: ${error.description} (${request.url.host})")
                 }
             }
         }
         web.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(m: ConsoleMessage): Boolean {
                 val msg = m.message() ?: ""
-                val important = m.messageLevel() == ConsoleMessage.MessageLevel.ERROR ||
-                    msg.contains("localhost") || msg.contains("${Server.PORT}") ||
+                // Kun beskeder om RFID-forbindelsen – andre fejlbeskeder fra Cicero kan indeholde lånerdata
+                val important = msg.contains("localhost") || msg.contains("${Server.PORT}") ||
                     msg.contains("rfid", ignoreCase = true)
                 if (important) LogBuf.add("Cicero-konsol: ${msg.take(400)}")
                 return true
@@ -528,7 +552,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             override fun onPermissionRequest(request: PermissionRequest) {
                 val wantsCamera = request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
                 val host = request.origin?.host ?: ""
-                if (!wantsCamera || !(host == "systematic.com" || host.endsWith(".systematic.com"))) {
+                val https = request.origin?.scheme == "https"
+                if (!wantsCamera || !https || !(host == "systematic.com" || host.endsWith(".systematic.com"))) {
                     request.deny()
                     return
                 }
@@ -549,6 +574,27 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             // En ensfarvet flade i Ciceros farve kan ikke forvrænges, når den strækkes.
             override fun getDefaultVideoPoster(): Bitmap =
                 Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888).apply { eraseColor(pal.bar) }
+
+            // Nyt vindue (target=_blank / window.open): Cicero-sider åbnes her, alt andet i Chrome
+            override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+                val catcher = WebView(this@MainActivity)
+                catcher.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
+                        val u = r.url
+                        val h = u.host ?: ""
+                        if (u.scheme == "https" && (h == "systematic.com" || h.endsWith(".systematic.com"))) {
+                            web.loadUrl(u.toString())
+                        } else {
+                            openExternal(u.toString())
+                        }
+                        v.destroy()
+                        return true
+                    }
+                }
+                (resultMsg.obj as WebView.WebViewTransport).webView = catcher
+                resultMsg.sendToTarget()
+                return true
+            }
 
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 progress.progress = newProgress
@@ -617,6 +663,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
+        // Låst: tilbage-knappen må ikke styre Cicero bag låsen
+        if (Hub.locked) {
+            moveTaskToBack(true)
+            return
+        }
         if (web.canGoBack()) web.goBack() else super.onBackPressed()
     }
 
@@ -628,7 +679,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         val problem = when {
             n == null -> "Ingen NFC"
             !n.isEnabled -> "NFC slået fra – tryk her"
-            !Server.listening -> null
+            Server.bindError != null -> Server.bindError
             else -> null
         }
         val fb = Hub.feedback
@@ -714,6 +765,27 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private fun openNfcSettingsIfOff() {
         val n = nfc ?: return
         if (!n.isEnabled) startActivity(Intent(Settings.ACTION_NFC_SETTINGS))
+    }
+
+    /** Åbn uden for app'en (Chrome, mail, telefon …). Web-indhold får aldrig lov at starte en bestemt app direkte. */
+    private fun openExternal(url: String) {
+        try {
+            val i = if (url.startsWith("intent:", ignoreCase = true)) {
+                Intent.parseUri(url, Intent.URI_INTENT_SCHEME).apply {
+                    component = null
+                    selector = null
+                }
+            } else {
+                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            }
+            i.addCategory(Intent.CATEGORY_BROWSABLE)
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(i)
+        } catch (e: ActivityNotFoundException) {
+            LogBuf.add("Kunne ikke åbne link udenfor app'en")
+        } catch (e: Exception) {
+            LogBuf.add("Ugyldigt link: ${e.message}")
+        }
     }
 
     // ---------- Log ----------

@@ -1,5 +1,6 @@
 package dk.kasvan.ciceronfc
 
+import android.os.SystemClock
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -12,21 +13,44 @@ import java.net.Socket
 import java.net.URLDecoder
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
  * Lille HTTP-server på localhost:1667, der svarer som Deichmans go-feig.
  * Cicero Mobile taler med den præcis som med en FEIG-læser på en pc.
+ *
+ * Sikkerhed: kun Cicero Mobile (https://cicero.systematic.com) får svar, og kun når
+ * forespørgslen er rettet til localhost. Mens app'en er låst, udføres ingen handlinger.
+ * NB: en ondsindet app på samme telefon kan stadig forfalske Origin-headeren; browsere kan ikke.
  */
 object Server {
     const val PORT = 1667
+
+    private const val ALLOWED_ORIGIN = "https://cicero.systematic.com"
+    private val ALLOWED_HOSTS = setOf("localhost", "127.0.0.1", "[::1]")
+    private const val MAX_SSE_CLIENTS = 4
+    private const val MAX_HEADER_LINES = 64
+    private const val MAX_HEADER_BYTES = 16_384
+    private const val MAX_BODY_BYTES = 65_536
+    private const val REQUEST_DEADLINE_MS = 5_000L
 
     private class SseClient(val out: OutputStream)
 
     private val clients = CopyOnWriteArrayList<SseClient>()
     private val sseExec = Executors.newSingleThreadExecutor()
 
+    // Højst 16 samtidige forbindelser; resten afvises i stedet for at starte uendeligt mange tråde
+    private val pool = ThreadPoolExecutor(2, 16, 30, TimeUnit.SECONDS, SynchronousQueue())
+
     @Volatile var listening = false
+        private set
+
+    /** Sat hvis porten ikke kunne åbnes (fx fordi en anden app har taget den). Vises i bjælken. */
+    @Volatile var bindError: String? = null
         private set
 
     fun start() {
@@ -36,14 +60,24 @@ object Server {
                     val ss = ServerSocket()
                     ss.reuseAddress = true
                     ss.bind(InetSocketAddress(InetAddress.getByName(addr), PORT))
-                    listening = true
+                    if (addr == "127.0.0.1") listening = true
                     LogBuf.add("Server lytter på $addr:$PORT")
+                    Hub.statusListener?.invoke()
                     while (true) {
                         val sock = ss.accept()
-                        thread(isDaemon = true) { handle(sock) }
+                        try {
+                            pool.execute { handle(sock) }
+                        } catch (_: RejectedExecutionException) {
+                            try { sock.close() } catch (_: Exception) {}
+                        }
                     }
                 } catch (e: Exception) {
                     LogBuf.add("Server på $addr: ${e.message}")
+                    // IPv4 er den, Cicero bruger; IPv6 findes ikke på alle telefoner
+                    if (addr == "127.0.0.1") {
+                        bindError = "Port $PORT er optaget"
+                        Hub.statusListener?.invoke()
+                    }
                 }
             }
         }
@@ -87,13 +121,27 @@ object Server {
         val headers: Map<String, String>,
     )
 
+    private fun hostOnly(hostHeader: String): String {
+        val h = hostHeader.trim().lowercase()
+        return if (h.startsWith("[")) h.substringBefore("]") + "]" else h.substringBefore(":")
+    }
+
     private fun handle(sock: Socket) {
         try {
-            sock.soTimeout = 15_000
+            sock.soTimeout = REQUEST_DEADLINE_MS.toInt()
             val inp = BufferedInputStream(sock.getInputStream())
             val out = sock.getOutputStream()
-            val req = readRequest(inp) ?: return sock.close()
+            val req = readRequest(inp, SystemClock.elapsedRealtime() + REQUEST_DEADLINE_MS) ?: return sock.close()
             val origin = req.headers["origin"]
+            val host = req.headers["host"]?.let { hostOnly(it) }
+
+            // Kun Cicero Mobile, og kun rettet til localhost (beskytter mod andre sider og DNS-tricks)
+            if (origin != ALLOWED_ORIGIN || host !in ALLOWED_HOSTS) {
+                LogBuf.add("Afvist forespørgsel (${origin ?: "uden afsender"} → ${req.path})")
+                respond(out, 403, "text/plain", "Forbidden", null)
+                sock.close()
+                return
+            }
 
             if (req.method == "OPTIONS") {
                 val extra = mutableListOf(
@@ -131,30 +179,40 @@ object Server {
         }
     }
 
-    private fun route(req: Request): Hub.Result = when (req.path) {
-        "/.status" -> Hub.Result(200, Hub.statusJson(), json = true)
-        "/scan" -> Hub.Result(200, Hub.inventoryJson(), json = true)
-        "/start" -> { Hub.mode = "SCAN"; Hub.Result(200, "") }
-        "/stop" -> { Hub.mode = "IDLE"; Hub.Result(200, "") }
-        "/alarmOn" -> Hub.alarm(on = true)
-        "/alarmOff" -> Hub.alarm(on = false)
-        "/write" -> {
-            val bc = req.query["barcode"]
-            if (bc.isNullOrEmpty()) Hub.Result(400, "Url Param 'barcode' is missing") else Hub.write(bc)
-        }
-        "/writetagbarcode" -> {
-            val id = req.query["tagid"]
-            val bc = req.query["barcode"]
-            when {
-                id.isNullOrEmpty() -> Hub.Result(400, "Url Param 'tagid' is missing")
-                bc.isNullOrEmpty() -> Hub.Result(400, "Url Param 'barcode' is missing")
-                else -> Hub.writeTagBarcode(id, bc)
+    private val actions = setOf("/alarmOn", "/alarmOff", "/write", "/writetagbarcode")
+
+    private fun route(req: Request): Hub.Result {
+        if (Hub.locked && req.path in actions) return Hub.Result(423, "Locked")
+        return when (req.path) {
+            "/.status" -> Hub.Result(200, Hub.statusJson(), json = true)
+            "/scan" -> Hub.Result(200, Hub.inventoryJson(), json = true)
+            "/start" -> { Hub.mode = "SCAN"; Hub.Result(200, "") }
+            "/stop" -> { Hub.mode = "IDLE"; Hub.Result(200, "") }
+            "/alarmOn" -> Hub.alarm(on = true)
+            "/alarmOff" -> Hub.alarm(on = false)
+            "/write" -> {
+                val bc = req.query["barcode"]
+                if (bc.isNullOrEmpty()) Hub.Result(400, "Url Param 'barcode' is missing") else Hub.write(bc)
             }
+            "/writetagbarcode" -> {
+                val id = req.query["tagid"]
+                val bc = req.query["barcode"]
+                when {
+                    id.isNullOrEmpty() -> Hub.Result(400, "Url Param 'tagid' is missing")
+                    bc.isNullOrEmpty() -> Hub.Result(400, "Url Param 'barcode' is missing")
+                    else -> Hub.writeTagBarcode(id, bc)
+                }
+            }
+            else -> Hub.Result(404, "404 page not found")
         }
-        else -> Hub.Result(404, "404 page not found")
     }
 
     private fun serveEvents(sock: Socket, inp: InputStream, out: OutputStream, origin: String?) {
+        if (clients.size >= MAX_SSE_CLIENTS) {
+            respond(out, 503, "text/plain", "Too many listeners", origin)
+            sock.close()
+            return
+        }
         val head = StringBuilder()
         head.append("HTTP/1.1 200 OK\r\n")
         head.append("Content-Type: text/event-stream\r\n")
@@ -190,7 +248,7 @@ object Server {
                 "Vary: Origin",
             )
         } else {
-            listOf("Access-Control-Allow-Origin: *")
+            emptyList()
         }
 
     private fun respond(
@@ -199,8 +257,8 @@ object Server {
     ) {
         val b = body.toByteArray(Charsets.UTF_8)
         val reason = when (code) {
-            200 -> "OK"; 204 -> "No Content"; 400 -> "Bad Request"; 404 -> "Not Found"
-            500 -> "Internal Server Error"; else -> "Status"
+            200 -> "OK"; 204 -> "No Content"; 400 -> "Bad Request"; 403 -> "Forbidden"; 404 -> "Not Found"
+            423 -> "Locked"; 500 -> "Internal Server Error"; 503 -> "Service Unavailable"; else -> "Status"
         }
         val sb = StringBuilder()
         sb.append("HTTP/1.1 $code $reason\r\n")
@@ -216,19 +274,30 @@ object Server {
         out.flush()
     }
 
-    private fun readRequest(inp: InputStream): Request? {
-        val first = readLine(inp) ?: return null
+    private fun readRequest(inp: InputStream, deadline: Long): Request? {
+        var budget = MAX_HEADER_BYTES
+        val first = readLine(inp, deadline) ?: return null
+        budget -= first.length
         val parts = first.split(" ")
         if (parts.size < 2) return null
         val headers = HashMap<String, String>()
+        var lines = 0
         while (true) {
-            val line = readLine(inp) ?: break
+            val line = readLine(inp, deadline) ?: break
             if (line.isEmpty()) break
+            budget -= line.length
+            if (++lines > MAX_HEADER_LINES || budget < 0) throw IOException("for mange headere")
             val i = line.indexOf(':')
             if (i > 0) headers[line.substring(0, i).trim().lowercase()] = line.substring(i + 1).trim()
         }
         val len = headers["content-length"]?.toIntOrNull() ?: 0
-        repeat(len) { if (inp.read() == -1) return@repeat }
+        if (len < 0 || len > MAX_BODY_BYTES) throw IOException("for stor forespørgsel")
+        var left = len
+        while (left > 0) {
+            if (SystemClock.elapsedRealtime() > deadline) throw IOException("for langsom forespørgsel")
+            if (inp.read() == -1) break
+            left--
+        }
 
         val target = parts[1]
         val q = target.indexOf('?')
@@ -246,14 +315,15 @@ object Server {
         return Request(parts[0].uppercase(), path, query, headers)
     }
 
-    private fun readLine(inp: InputStream): String? {
+    private fun readLine(inp: InputStream, deadline: Long): String? {
         val buf = ByteArrayOutputStream()
         while (true) {
+            if (SystemClock.elapsedRealtime() > deadline) throw IOException("for langsom forespørgsel")
             val c = inp.read()
             if (c == -1) return if (buf.size() == 0) null else buf.toString("ISO-8859-1")
             if (c == '\n'.code) break
             if (c != '\r'.code) buf.write(c)
-            if (buf.size() > 16_384) throw IOException("for lang header-linje")
+            if (buf.size() > MAX_HEADER_BYTES) throw IOException("for lang header-linje")
         }
         return buf.toString("ISO-8859-1")
     }

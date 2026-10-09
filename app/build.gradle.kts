@@ -20,18 +20,16 @@ android {
     signingConfigs {
         create("fast") {
             storeFile = file(System.getenv("KEYSTORE_PATH") ?: "release.keystore")
-            storePassword = "ciceronfc"
+            // Adgangskoden ligger i GitHubs hemmelige boks (KEYSTORE_PASSWORD), ikke i koden
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
             keyAlias = "ciceronfc"
-            keyPassword = "ciceronfc"
+            keyPassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
         }
     }
 
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("fast")
-        }
-        getByName("debug") {
             signingConfig = signingConfigs.getByName("fast")
         }
     }

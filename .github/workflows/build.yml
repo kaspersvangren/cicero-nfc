@@ -29,9 +29,10 @@ jobs:
         shell: bash
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "Hemmeligheden KEYSTORE_B64 mangler under Settings → Secrets and variables → Actions" | tee build.log
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "Hemmeligheden KEYSTORE_B64 eller KEYSTORE_PASSWORD mangler under Settings → Secrets and variables → Actions" | tee build.log
             exit 1
           fi
           echo "$KEYSTORE_B64" | base64 -d > app/release.keystore
@@ -41,9 +42,15 @@ jobs:
         env:
           VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: 0.1.${{ github.run_number }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           set -o pipefail
           gradle :app:assembleRelease --stacktrace --no-daemon 2>&1 | tee build.log
+
+      - name: Slet nøglen fra byggemaskinen
+        if: always()
+        shell: bash
+        run: rm -f app/release.keystore
 
       - name: Udgiv på GitHub
         shell: bash

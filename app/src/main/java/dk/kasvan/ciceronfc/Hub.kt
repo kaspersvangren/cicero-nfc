@@ -201,6 +201,11 @@ object Hub {
         statusListener?.invoke()
     }
 
+    /** App'en er låst: slip bøgerne ved telefonen, så intet kan ændres på dem bag låsen. */
+    fun onLocked() {
+        exec.execute { for (s in inventory.values.toList()) drop(s, "app'en blev låst") }
+    }
+
     fun onClientConnected() {
         onClientsChanged()
         exec.schedule(Runnable {
@@ -270,6 +275,7 @@ object Hub {
     fun alarm(on: Boolean): Result = onExec {
         val value = if (on) 0x07 else 0xC2
         val word = if (on) "TIL (sikret)" else "FRA (udlånt)"
+        if (locked) return@onExec Result(423, "Locked")
         if (inventory.isEmpty()) {
             LogBuf.add("Alarm $word: ingen bog ved telefonen")
             signal(Fb.ERROR, "For tidligt – alarm ikke skiftet")
@@ -294,6 +300,7 @@ object Hub {
     }
 
     fun write(barcode: String): Result = onExec {
+        if (locked) return@onExec Result(423, "Locked")
         if (inventory.isEmpty()) return@onExec Result(400, "Inventory empty")
         val n = inventory.size
         var i = 0
@@ -313,6 +320,7 @@ object Hub {
     }
 
     fun writeTagBarcode(tagId: String, barcode: String): Result = onExec {
+        if (locked) return@onExec Result(423, "Locked")
         if (inventory.isEmpty()) return@onExec Result(400, "Inventory empty")
         val s = inventory[tagId.uppercase()] ?: return@onExec Result(400, "Tag not in range: $tagId")
         val old = s.content
