@@ -15,7 +15,7 @@ import java.net.URL
 import kotlin.concurrent.thread
 
 /**
- * Tjekker GitHub for en nyere version og installerer den på brugerens opfordring.
+ * Tjekker GitHub for en nyere version og installerer den, når brugeren beder om det.
  * Der sendes ingen data – app'en spørger kun "hvad er seneste version?".
  * Android installerer kun en opdatering med samme segl som den installerede app,
  * så en manipuleret fil kan ikke komme ind ad denne vej.
