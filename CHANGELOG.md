@@ -1,0 +1,28 @@
+# Ændringer
+
+- **0.1.26** – Forkert Hostname/Port i Cicero vises som "RFID-fejl" (begge, hvis begge er forkerte). Opdateringen viser, hvad der er nyt.
+- **0.1.25** – Tydelig fejlbesked ved forkert RFID-opsætning i Cicero. Licenser og tak til Deichman under Om.
+- **0.1.24** – RFID-forbindelsen virker uanset telefonens browserversion.
+- **0.1.23** – Testversion (test af opdatering i app'en).
+- **0.1.22** – Versionsnummer på låseskærmen.
+- **0.1.21** – App'en kan opdatere sig selv.
+- **0.1.20** – App'en giver sig ikke længere ud for at være Chrome.
+- **0.1.19** – Ingen ændringer i funktion.
+- **0.1.18** – Sikkerhedsrettelser efter uafhængig gennemgang.
+- **0.1.17** – Låser efter 5 minutter uden brug; åbnes med fingeraftryk eller pinkode.
+- **0.1.16** – Ny signeringsnøgle (kræver geninstallation én gang).
+- **0.1.15** – Klokkelyd ("ka-pling") ved alarmskift; tik på 70 ms.
+- **0.1.14** – Kraftigere tik, når en bog læses.
+- **0.1.13** – Tekststørrelse fjernet igen (Ciceros layout tåler det ikke).
+- **0.1.12** – Tekststørrelse i menuen.
+- **0.1.11** – Pinch-zoom.
+- **0.1.10** – Pænere flade, når kameraet starter.
+- **0.1.9** – Kamera til scanning af lånerkort.
+- **0.1.8** – Lille farvet pille med klokke; vibration som hovedsignal.
+- **0.1.7** – Kompakt bjælke; tydelig forskel på alarm fra/til.
+- **0.1.6** – Ingen "aktiver RFID"-opfordring på sider uden RFID.
+- **0.1.5** – Følger Ciceros mørke/lyse tilstand.
+- **0.1.4** – Udseende som Cicero Mobile.
+- **0.1.3** – Bog, der allerede ligger ved telefonen, meldes, når Cicero begynder at lytte.
+- **0.1.2** – Tydelig besked med farve, lyd og vibration.
+- **0.1.1** – Første prototype.
