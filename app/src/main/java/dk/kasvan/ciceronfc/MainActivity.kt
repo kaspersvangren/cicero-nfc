@@ -612,12 +612,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
      */
     private val themeProbe = """
         (function () {
-          // 1) Ciceros egen markering af mørk tilstand, hvis den findes
-          var cls = (document.documentElement.className || '') + ' ' + (document.body ? document.body.className : '');
-          cls = cls.trim().slice(0, 150);
-          if (/dark-?theme|theme-?dark|dark-?mode|(^|\s)dark(\s|$)/i.test(cls)) return { t: 'dark', src: 'klasse', cls: cls };
-          // 2) Ellers: baggrundsfarven flere steder i den nederste del af skærmen (ikke farvede overskrifter).
-          //    Halvgennemsigtige lag, fx skyggen bag en dialog, springes over.
+          // Cicero markerer ikke selv lys/mørk, så baggrundsfarven aflæses flere steder i den nederste
+          // del af skærmen (ikke farvede overskrifter). Halvgennemsigtige lag, fx skyggen bag en dialog, springes over.
           function lum(e) {
             while (e) {
               var c = getComputedStyle(e).backgroundColor;
@@ -634,30 +630,25 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
               if (l >= 0) { if (l < 128) dark++; else light++; }
             });
           });
-          if (dark + light === 0) return { t: 'unknown', cls: cls };
-          return { t: dark > light ? 'dark' : 'light', src: 'farve', d: dark, l: light, cls: cls };
+          if (dark + light === 0) return { t: 'unknown' };
+          return { t: dark > light ? 'dark' : 'light', d: dark, l: light };
         })()
     """.trimIndent()
 
     private var lastNfcOn: Boolean? = null
     private var pendingTheme: String? = null
     private var themeLogged = false
-    private val loggedClasses = HashSet<String>()
 
     private fun detectCiceroTheme() {
         web.evaluateJavascript(themeProbe) { result ->
             val j = try { org.json.JSONObject(result ?: "") } catch (_: Exception) { return@evaluateJavascript }
             val theme = j.optString("t")
-            // Ciceros sideklasser fortæller, om Cicero selv markerer lys/mørk – log de første forskellige
-            val cls = j.optString("cls")
-            if (cls.isNotEmpty() && loggedClasses.size < 3 && loggedClasses.add(cls)) LogBuf.add("Ciceros sideklasser: '$cls'")
             val newPal = when (theme) {
                 "dark" -> darkPalette
                 "light" -> lightPalette
                 else -> return@evaluateJavascript
             }
-            val how = if (j.optString("src") == "klasse") "Ciceros egen markering" else
-                "aflæst farve, ${maxOf(j.optInt("d"), j.optInt("l"))} af ${j.optInt("d") + j.optInt("l")} punkter"
+            val how = "${maxOf(j.optInt("d"), j.optInt("l"))} af ${j.optInt("d") + j.optInt("l")} punkter"
             val name = if (theme == "dark") "mørk" else "lys"
             if (!themeLogged) { themeLogged = true; LogBuf.add("Tema: $name ($how)") }
             // Skift først, når to målinger i træk er enige – så blinker bjælken ikke ved sideskift
@@ -842,6 +833,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     }
 
     private fun onPinFieldFocused() {
+        // Cicero sætter nogle gange fokus på feltet igen – må ikke nulstille de cifre, der allerede er tastet
+        if (pinPad.isShowing) return
         val host = Uri.parse(web.url ?: "").host?.lowercase()
         if (Hub.locked || host != CICERO_HOST || !prefs().getBoolean(PREF_PIN_PAD, true)) {
             useNormalKeyboardForPin()
@@ -924,6 +917,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             override fun onPageFinished(view: WebView, url: String) {
                 onPageChanged(url, loading = false)
                 injectPinWatcher()
+                web.evaluateJavascript(SWIPE_TABS_JS, null)
                 handler.postDelayed({ detectCiceroTheme() }, 500)
             }
 
@@ -1369,4 +1363,32 @@ private val PIN_KEYBOARD_JS = """
   el.focus();
   setTimeout(function () { el.removeAttribute('data-cnfc-skip'); }, 300);
 })()
+"""
+
+/**
+ * Ciceros fanerække (fx Reservationer · Bookinger · Fjernlån) kan kun bladres med pile.
+ * Her får den almindelig rulning, så den følger fingeren; pilene skjules.
+ * Valgt fane rulles frem, når man trykker på den. Rammes navnene ikke, er alt som før.
+ */
+private val SWIPE_TABS_JS = """
+(function () {
+  if (document.getElementById('cnfc-swipe')) return;
+  var st = document.createElement('style');
+  st.id = 'cnfc-swipe';
+  st.textContent =
+    '.mat-mdc-tab-header-pagination, .mat-tab-header-pagination { display: none !important; }' +
+    '.mat-mdc-tab-label-container, .mat-tab-label-container, .mat-mdc-tab-link-container, .mat-tab-link-container {' +
+    '  overflow-x: auto !important; scrollbar-width: none; }' +
+    '.mat-mdc-tab-label-container::-webkit-scrollbar, .mat-tab-label-container::-webkit-scrollbar,' +
+    '.mat-mdc-tab-link-container::-webkit-scrollbar, .mat-tab-link-container::-webkit-scrollbar { display: none; }' +
+    '.mat-mdc-tab-list, .mat-tab-list, .mat-mdc-tab-links, .mat-tab-links { transform: none !important; }';
+  (document.head || document.documentElement).appendChild(st);
+  document.addEventListener('click', function (e) {
+    var t = e.target && e.target.closest &&
+      e.target.closest('.mat-mdc-tab, .mat-mdc-tab-link, .mat-tab-label, .mat-tab-link');
+    if (t) setTimeout(function () {
+      try { t.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' }); } catch (x) {}
+    }, 50);
+  }, true);
+})();
 """
