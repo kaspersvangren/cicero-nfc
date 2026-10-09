@@ -18,7 +18,7 @@ import android.widget.TextView
 class PinPad(private val ctx: Context, private val dp: (Int) -> Int) {
     companion object {
         const val MIN_DIGITS = 4
-        const val MAX_DIGITS = 8
+        const val MAX_DIGITS = 16 // FBS 2.0 tillader op til 16 cifre
     }
 
     var onOk: ((String) -> Unit)? = null
@@ -36,7 +36,7 @@ class PinPad(private val ctx: Context, private val dp: (Int) -> Int) {
     private var keyBg = Color.GRAY
 
     private val title = TextView(ctx).apply {
-        text = "Indtast din pinkode"
+        text = "Indtast pinkode"
         textSize = 24f
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         gravity = Gravity.CENTER
@@ -45,6 +45,7 @@ class PinPad(private val ctx: Context, private val dp: (Int) -> Int) {
         textSize = 36f
         gravity = Gravity.CENTER
         letterSpacing = 0.3f
+        maxLines = 1
         minHeight = dp(64)
     }
     private val box = LinearLayout(ctx).apply {
@@ -158,6 +159,10 @@ class PinPad(private val ctx: Context, private val dp: (Int) -> Int) {
 
     private fun update() {
         dots.text = "●".repeat(digits.length)
+        // Mindre prikker ved lange koder, så de altid kan stå på én linje
+        val n = digits.length
+        dots.textSize = when { n <= 8 -> 36f; n <= 12 -> 26f; else -> 20f }
+        dots.letterSpacing = if (n <= 8) 0.3f else 0.15f
         val ready = digits.length >= MIN_DIGITS
         if (::okBg.isInitialized) {
             okBg.setColor(if (ready) blue else keyBg)

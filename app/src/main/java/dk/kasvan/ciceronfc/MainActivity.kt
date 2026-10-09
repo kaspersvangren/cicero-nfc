@@ -566,20 +566,33 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
      */
     private val themeProbe = """
         (function () {
-          function bg(e) {
+          // 1) Ciceros egen markering af mørk tilstand, hvis den findes
+          var cls = (document.documentElement.className || '') + ' ' + (document.body ? document.body.className : '');
+          if (/dark-?theme|theme-?dark|dark-?mode|(^|\s)dark(\s|$)/i.test(cls)) return 'dark';
+          // 2) Ellers: baggrundsfarven flere steder i den nederste del af skærmen (ikke farvede overskrifter).
+          //    Halvgennemsigtige lag, fx skyggen bag en dialog, springes over.
+          function lum(e) {
             while (e) {
               var c = getComputedStyle(e).backgroundColor;
               var m = c && c.match(/[\d.]+/g);
-              if (m && !(m.length > 3 && +m[3] === 0)) return 0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2];
+              if (m && (m.length < 4 || +m[3] >= 0.9)) return 0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2];
               e = e.parentElement;
             }
             return -1;
           }
-          var l = bg(document.elementFromPoint(window.innerWidth / 2, 4));
-          if (l < 0) l = bg(document.body);
-          return l < 0 ? 'unknown' : (l < 128 ? 'dark' : 'light');
+          var w = window.innerWidth, h = window.innerHeight, dark = 0, light = 0;
+          [0.1, 0.5, 0.9].forEach(function (x) {
+            [0.5, 0.7, 0.9].forEach(function (y) {
+              var l = lum(document.elementFromPoint(w * x, h * y));
+              if (l >= 0) { if (l < 128) dark++; else light++; }
+            });
+          });
+          if (dark + light === 0) return 'unknown';
+          return dark > light ? 'dark' : 'light';
         })()
     """.trimIndent()
+
+    private var pendingTheme: String? = null
 
     private fun detectCiceroTheme() {
         web.evaluateJavascript(themeProbe) { result ->
@@ -589,7 +602,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 "light" -> lightPalette
                 else -> return@evaluateJavascript
             }
-            if (newPal !== pal) {
+            // Skift først, når to målinger i træk er enige – så blinker bjælken ikke ved sideskift
+            if (newPal === pal) { pendingTheme = null; return@evaluateJavascript }
+            if (pendingTheme != theme) { pendingTheme = theme; return@evaluateJavascript }
+            pendingTheme = null
+            run {
                 pal = newPal
                 getSharedPreferences("ui", MODE_PRIVATE).edit().putString("ciceroTheme", theme).apply()
                 applyPalette()
