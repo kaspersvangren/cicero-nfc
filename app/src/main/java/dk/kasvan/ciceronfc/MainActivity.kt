@@ -35,6 +35,7 @@ import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.webkit.ConsoleMessage
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -63,6 +64,9 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         const val LOGIN_HOST = "auth.cicero.systematic.com"
         const val MAX_PAGE_WAIT_MS = 5000L
         const val QUIET_AFTER_LOAD_MS = 1500L
+        const val CICERO_HOST = "cicero.systematic.com"
+        const val PREF_PIN_PAD = "pinPad"
+        const val PREF_PIN_FLIP = "pinPadFlip"
     }
 
     /** Cicero Mobiles egne farver (målt på skærmbilleder af Cicero). */
@@ -122,6 +126,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private val cameraRequestCode = 42
     private val unlockRequestCode = 43
     private lateinit var lockView: LinearLayout
+    private lateinit var pinPad: PinPad
     private lateinit var lockIcon: ImageView
     private lateinit var lockTitle: TextView
     private lateinit var lockHint: TextView
@@ -285,8 +290,20 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.4).toInt()),
         )
         lockView = buildLockView()
+        pinPad = PinPad(this, ::dp).apply {
+            onOk = { pin -> fillPin(pin) }
+            onCancel = { LogBuf.add("Pinkode annulleret") }
+            onKeyboard = { useNormalKeyboardForPin() }
+            onFlip = {
+                val flip = !prefs().getBoolean(PREF_PIN_FLIP, false)
+                prefs().edit().putBoolean(PREF_PIN_FLIP, flip).apply()
+                setFlipped(flip)
+            }
+        }
         val container = FrameLayout(this).apply {
             addView(root, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            // Pinkode-tastaturet ligger over Cicero, men under låsen
+            addView(pinPad.view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             addView(lockView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         }
         setContentView(container)
@@ -338,6 +355,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         if (!Hub.locked) LogBuf.add("Låst")
         Hub.locked = true
         Hub.onLocked()
+        pinPad.hide()
         refreshLockUi()
     }
 
@@ -533,6 +551,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         progress.progressBackgroundTintList = ColorStateList.valueOf(pal.line)
         logView.setTextColor(pal.logText)
         lockView.setBackgroundColor(pal.bar)
+        pinPad.setColors(bg = pal.bar, text = pal.text, sub = pal.sub, key = pal.offCircle, blue = pal.blue)
         lockIcon.imageTintList = ColorStateList.valueOf(pal.text)
         lockTitle.setTextColor(pal.text)
         lockHint.setTextColor(pal.sub)
@@ -592,9 +611,17 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         m.menu.add(0, 2, 1, "Del log")
         m.menu.add(0, 3, 2, "Genindlæs Cicero")
         if (isDeviceSecure()) m.menu.add(0, 6, 3, "Lås nu")
-        m.menu.add(0, 7, 4, "Søg efter opdatering")
-        m.menu.add(0, 8, 5, "Ændringer")
-        m.menu.add(0, 4, 6, "Om Cicero NFC")
+        m.menu.add(0, 9, 4, "Pinkode-tastatur").apply {
+            isCheckable = true
+            isChecked = prefs().getBoolean(PREF_PIN_PAD, true)
+        }
+        m.menu.add(0, 10, 5, "Vend pinkode-tastatur").apply {
+            isCheckable = true
+            isChecked = prefs().getBoolean(PREF_PIN_FLIP, false)
+        }
+        m.menu.add(0, 7, 6, "Søg efter opdatering")
+        m.menu.add(0, 8, 7, "Ændringer")
+        m.menu.add(0, 4, 8, "Om Cicero NFC")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> toggleLog()
@@ -604,6 +631,16 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 6 -> lock()
                 7 -> checkForUpdateNow()
                 8 -> showChangelog()
+                9 -> {
+                    val on = !prefs().getBoolean(PREF_PIN_PAD, true)
+                    prefs().edit().putBoolean(PREF_PIN_PAD, on).apply()
+                    LogBuf.add(if (on) "Pinkode-tastatur slået til" else "Pinkode-tastatur slået fra")
+                    injectPinWatcher()
+                }
+                10 -> {
+                    val flip = !prefs().getBoolean(PREF_PIN_FLIP, false)
+                    prefs().edit().putBoolean(PREF_PIN_FLIP, flip).apply()
+                }
             }
             true
         }
@@ -615,18 +652,12 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             .setTitle("Cicero NFC ${BuildConfigInfo.version(this)}")
             .setMessage(
                 "Bruger telefonens NFC som RFID-læser i Cicero Mobile.\n\n" +
-                    "Opsætning i Cicero (Enhedsindstillinger → RFID scanner):\n" +
-                    "Deichman · localhost · 1667\n" +
-                    "Slå \"RFID-scanner til som standard\" til.\n\n" +
-                    "Hold bogen mod telefonen, til den vibrerer og pillen viser alarm fra/til.\n\n" +
-                    "App'en låser sig efter 5 minutter uden brug og låses op med telefonens fingeraftryk eller pinkode.\n\n" +
-                    "App'en tjekker GitHub for nye versioner (højst hver 6. time). Der sendes ingen data.\n\n" +
                     "Designet og testet af Kasper Svangren, Gladsaxe Bibliotekerne. Kodet med AI-assistance (Claude).\n\n" +
-                    "Tak til Deichman bibliotek i Oslo, hvis open source-program go-feig (MIT-licens) har givet protokollen, " +
-                    "som Cicero taler med RFID-læseren. Der er ikke kopieret kode fra go-feig.",
+                    "Tak til Deichman bibliotek i Oslo for go-feig (MIT-licens), hvis protokol Cicero taler med RFID-læseren. " +
+                    "Der er ikke kopieret kode.",
             )
             .setPositiveButton("OK", null)
-            .setNeutralButton("Open source-licenser") { _, _ -> showLicenses() }
+            .setNeutralButton("Licenser") { _, _ -> showLicenses() }
             .show()
     }
 
@@ -706,6 +737,52 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             .show()
     }
 
+    // ---------- Pinkode-tastatur ----------
+
+    private fun prefs() = getSharedPreferences("ui", MODE_PRIVATE)
+
+    /** Cicero kalder denne, når pinkode-feltet får fokus. Den modtager ingen data fra siden. */
+    private inner class PinBridge {
+        @JavascriptInterface
+        fun pinFocus() {
+            runOnUiThread { onPinFieldFocused() }
+        }
+    }
+
+    /** Holder øje med, om Ciceros pinkode-felt vælges. Slået fra = Cicero opfører sig som før. */
+    private fun injectPinWatcher() {
+        val on = prefs().getBoolean(PREF_PIN_PAD, true)
+        web.evaluateJavascript(PIN_WATCHER_JS.replace("%ON%", on.toString()), null)
+    }
+
+    private fun onPinFieldFocused() {
+        val host = Uri.parse(web.url ?: "").host?.lowercase()
+        if (Hub.locked || host != CICERO_HOST || !prefs().getBoolean(PREF_PIN_PAD, true)) {
+            useNormalKeyboardForPin()
+            return
+        }
+        getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(web.windowToken, 0)
+        LogBuf.add("Pinkode-tastatur vist")
+        pinPad.show(prefs().getBoolean(PREF_PIN_FLIP, false))
+    }
+
+    /** Sæt koden i Ciceros felt. Kun cifre, så intet andet kan sendes ind på siden. */
+    private fun fillPin(pin: String) {
+        if (pin.isEmpty() || !pin.all { it in '0'..'9' }) return
+        web.evaluateJavascript(PIN_FILL_JS.replace("%PIN%", pin)) { r ->
+            LogBuf.add(if (r?.contains("ok") == true) "Pinkode udfyldt" else "Pinkode-feltet var forsvundet")
+        }
+    }
+
+    /** "Tastatur": brug telefonens almindelige tastatur til feltet denne gang */
+    private fun useNormalKeyboardForPin() {
+        web.evaluateJavascript(PIN_KEYBOARD_JS, null)
+        handler.postDelayed({
+            web.requestFocus()
+            getSystemService(InputMethodManager::class.java)?.showSoftInput(web, InputMethodManager.SHOW_IMPLICIT)
+        }, 150)
+    }
+
     private fun setupWeb(saved: Bundle?) {
         // Fjernfejlsøgning (chrome://inspect) kun i fejlsøgnings-builds, aldrig i den rigtige app
         WebView.setWebContentsDebuggingEnabled((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0)
@@ -763,6 +840,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
             override fun onPageFinished(view: WebView, url: String) {
                 onPageChanged(url, loading = false)
+                injectPinWatcher()
                 handler.postDelayed({ detectCiceroTheme() }, 500)
             }
 
@@ -844,6 +922,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             }
         }
 
+        web.addJavascriptInterface(PinBridge(), "CiceroNFC")
         if (saved != null) web.restoreState(saved) else web.loadUrl(START_URL)
     }
 
@@ -903,6 +982,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         handler.removeCallbacks(lockTicker)
         handler.removeCallbacks(delayedAuth)
         waitingForPage = false
+        // Pinkoden må ikke blive stående på skærmen, hvis app'en forlades
+        pinPad.hide()
         nfc?.disableReaderMode(this)
         CookieManager.getInstance().flush()
     }
@@ -916,6 +997,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         // Låst: tilbage-knappen må ikke styre Cicero bag låsen
         if (Hub.locked) {
             moveTaskToBack(true)
+            return
+        }
+        if (pinPad.isShowing) {
+            pinPad.hide()
+            LogBuf.add("Pinkode annulleret")
             return
         }
         if (web.canGoBack()) web.goBack() else super.onBackPressed()
@@ -1140,3 +1226,58 @@ private val RFID_PATHS = setOf(
     "/.status", "/events", "/events/", "/start", "/stop", "/scan",
     "/alarmOn", "/alarmOff", "/write", "/writetagbarcode",
 )
+
+/** Lægges ind i Cicero: opdager når feltet "Pinkode" vælges og beder app'en vise sit store tastatur */
+private val PIN_WATCHER_JS = """
+(function () {
+  window.__cnfcPinOn = %ON%;
+  if (window.__cnfcPinInstalled) return;
+  window.__cnfcPinInstalled = true;
+  function textOf(el) {
+    var t = [el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('name'),
+             el.id, el.getAttribute('formcontrolname')].join(' ');
+    if (el.labels) for (var i = 0; i < el.labels.length; i++) t += ' ' + el.labels[i].textContent;
+    var lb = el.getAttribute('aria-labelledby');
+    if (lb) lb.split(' ').forEach(function (id) { var x = document.getElementById(id); if (x) t += ' ' + x.textContent; });
+    var ff = el.closest ? el.closest('mat-form-field, .mat-mdc-form-field, .mat-form-field') : null;
+    if (ff) { var l = ff.querySelector('mat-label, label'); if (l) t += ' ' + l.textContent; }
+    return t.toLowerCase();
+  }
+  document.addEventListener('focusin', function (e) {
+    var el = e.target;
+    if (!window.__cnfcPinOn || !el || el.tagName !== 'INPUT') return;
+    if (location.hostname !== 'cicero.systematic.com') return;
+    if (el.getAttribute('data-cnfc-skip') === '1') return;
+    if (!/pin.?kode|pincode/.test(textOf(el))) return;
+    window.__cnfcPinEl = el;
+    el.blur();
+    try { CiceroNFC.pinFocus(); } catch (x) {}
+  }, true);
+})();
+"""
+
+/** Sætter koden i feltet, så Cicero opdager den som om den var tastet */
+private val PIN_FILL_JS = """
+(function (v) {
+  var el = window.__cnfcPinEl;
+  if (!el || !document.contains(el)) return 'none';
+  var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  set.call(el, v);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  el.dispatchEvent(new FocusEvent('blur'));
+  el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+  return 'ok';
+})('%PIN%')
+"""
+
+/** Giv feltet fokus igen uden at det store tastatur kommer frem */
+private val PIN_KEYBOARD_JS = """
+(function () {
+  var el = window.__cnfcPinEl;
+  if (!el || !document.contains(el)) return;
+  el.setAttribute('data-cnfc-skip', '1');
+  el.focus();
+  setTimeout(function () { el.removeAttribute('data-cnfc-skip'); }, 300);
+})()
+"""
