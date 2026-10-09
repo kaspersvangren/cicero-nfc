@@ -59,6 +59,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
         /** App'en låser sig efter 5 minutter uden brug. */
         const val LOCK_AFTER_MS = 5 * 60 * 1000L
+        /** Ciceros login-side (Keycloak). Står app'en her, er man ikke logget ind. */
+        const val LOGIN_HOST = "auth.cicero.systematic.com"
+        const val MAX_PAGE_WAIT_MS = 5000L
+        const val QUIET_AFTER_LOAD_MS = 1500L
     }
 
     /** Cicero Mobiles egne farver (målt på skærmbilleder af Cicero). */
@@ -123,6 +127,18 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private lateinit var lockHint: TextView
     private var authInProgress = false
     private var lastAuthEnded = 0L
+    private var authCancel: CancellationSignal? = null
+
+    // Hvilken side Cicero står på – login-siden betyder "ikke logget ind", og så låser app'en ikke
+    private var pageHost: String? = null
+    private var pageLoading = false
+    private var waitingForPage = false
+    /** Låst op, fordi login-siden stod fremme – tidspunktet, så et login uden tryk kan opdages */
+    private var loginUnlockAt = -1L
+    private val delayedAuth = Runnable {
+        waitingForPage = false
+        if (Hub.locked && resumed) authenticate()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -325,11 +341,61 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         refreshLockUi()
     }
 
-    private fun unlock() {
+    private fun unlock(reason: String = "Låst op", byLoginPage: Boolean = false) {
         Hub.locked = false
         Hub.lastActivity = SystemClock.elapsedRealtime()
-        LogBuf.add("Låst op")
+        loginUnlockAt = if (byLoginPage) Hub.lastActivity else -1L
+        LogBuf.add(reason)
         refreshLockUi()
+    }
+
+    private fun onLoginPage() = pageHost == LOGIN_HOST
+
+    /**
+     * Låst og app'en kommer frem: står Cicero på login-siden, er der intet at beskytte.
+     * Kender vi ikke siden endnu (opstart), ventes der kort på, at Cicero er indlæst.
+     */
+    private fun startUnlockFlow() {
+        if (!Hub.locked || authInProgress) return
+        when {
+            onLoginPage() -> unlock("Ikke logget ind i Cicero – ingen lås", byLoginPage = true)
+            pageHost != null && !pageLoading -> authenticate()
+            else -> {
+                waitingForPage = true
+                handler.removeCallbacks(delayedAuth)
+                handler.postDelayed(delayedAuth, MAX_PAGE_WAIT_MS)
+            }
+        }
+    }
+
+    /** Kaldes, når Cicero skifter side (også når login-siden kommer frem efter udløbet login). */
+    private fun onPageChanged(url: String, loading: Boolean?) {
+        pageHost = Uri.parse(url).host?.lowercase()
+        if (loading != null) pageLoading = loading
+        if (!Hub.locked) {
+            // Forbi login-siden og ind i Cicero uden at nogen har rørt telefonen (fx automatisk login):
+            // så har ingen bevist, hvem de er – lås igen
+            if (loginUnlockAt >= 0 && !onLoginPage()) {
+                val touched = Hub.lastActivity > loginUnlockAt
+                loginUnlockAt = -1L
+                if (!touched && isDeviceSecure()) {
+                    LogBuf.add("Logget ind uden tryk – låser igen")
+                    lock()
+                    if (resumed) startUnlockFlow()
+                }
+            }
+            return
+        }
+        if (onLoginPage()) {
+            handler.removeCallbacks(delayedAuth)
+            waitingForPage = false
+            authCancel?.cancel()
+            unlock("Ikke logget ind i Cicero – ingen lås", byLoginPage = true)
+        } else if (waitingForPage && !pageLoading) {
+            // Giv Cicero et øjeblik til evt. at sende videre til login, før der spørges
+            handler.removeCallbacks(delayedAuth)
+            handler.postDelayed(delayedAuth, QUIET_AFTER_LOAD_MS)
+        }
     }
 
     private fun refreshLockUi() {
@@ -389,6 +455,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     /** Telefonens egen skærmlås: fingeraftryk, ansigt eller pinkode. App'en ser aldrig selve koden. */
     private fun authenticate() {
         if (authInProgress) return
+        handler.removeCallbacks(delayedAuth)
+        waitingForPage = false
         if (!isDeviceSecure()) { unlock(); return }
         authInProgress = true
         if (Build.VERSION.SDK_INT >= 30) {
@@ -398,8 +466,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL,
                 )
                 .build()
+            val cancel = CancellationSignal()
+            authCancel = cancel
             prompt.authenticate(
-                CancellationSignal(), mainExecutor,
+                cancel, mainExecutor,
                 object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                         authEnded()
@@ -425,6 +495,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     }
 
     private fun authEnded() {
+        authCancel = null
         authInProgress = false
         lastAuthEnded = SystemClock.elapsedRealtime()
     }
@@ -447,7 +518,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private val lockTicker = object : Runnable {
         override fun run() {
             if (!resumed) return
-            if (!Hub.locked && isDeviceSecure() &&
+            if (!Hub.locked && isDeviceSecure() && !onLoginPage() &&
                 SystemClock.elapsedRealtime() - Hub.lastActivity >= LOCK_AFTER_MS
             ) {
                 lock()
@@ -686,8 +757,17 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 )
             }
 
+            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                onPageChanged(url, loading = true)
+            }
+
             override fun onPageFinished(view: WebView, url: String) {
+                onPageChanged(url, loading = false)
                 handler.postDelayed({ detectCiceroTheme() }, 500)
+            }
+
+            override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+                onPageChanged(url, loading = null)
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -789,9 +869,9 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         super.onResume()
         // Lås, hvis app'en ikke har været brugt i 5 minutter (også mens den var i baggrunden)
         if (isDeviceSecure()) {
-            if (!Hub.locked && SystemClock.elapsedRealtime() - Hub.lastActivity >= LOCK_AFTER_MS) lock()
+            if (!Hub.locked && !onLoginPage() && SystemClock.elapsedRealtime() - Hub.lastActivity >= LOCK_AFTER_MS) lock()
             refreshLockUi()
-            if (Hub.locked && !authInProgress && SystemClock.elapsedRealtime() - lastAuthEnded > 1500) authenticate()
+            if (Hub.locked && !authInProgress && SystemClock.elapsedRealtime() - lastAuthEnded > 1500) startUnlockFlow()
         } else if (Hub.locked) {
             Hub.locked = false
             refreshLockUi()
@@ -821,6 +901,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         resumed = false
         handler.removeCallbacks(themeTicker)
         handler.removeCallbacks(lockTicker)
+        handler.removeCallbacks(delayedAuth)
+        waitingForPage = false
         nfc?.disableReaderMode(this)
         CookieManager.getInstance().flush()
     }
