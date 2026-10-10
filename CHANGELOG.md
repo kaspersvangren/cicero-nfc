@@ -1,6 +1,6 @@
 # Ændringer
 
-- **Næste version** – Nulstil/Søg ligger nu altid nederst som en lille pille over bundmenuen (en kopi, der trykker på Ciceros egne knapper). "Til toppen" og plus-knappen er fri.
+- **0.1.46** – Nulstil/Søg ligger nu altid nederst som en lille pille over bundmenuen (en kopi, der trykker på Ciceros egne knapper). "Til toppen" og plus-knappen er fri.
 - **0.1.45** – Den svævende knaprække står rigtigt: lige under fanerne eller lige over bundmenuen, i søgekortets bredde og over Ciceros egne elementer.
 - **0.1.44** – Ny side ⋮ → Indstillinger samler lyd, pinkode-tastatur, vend og tilpasninger; lyden ved alarmskift kan slås fra (vibrationen bliver). Knaprækken Nulstil/Søg glider uden hop: øverst under fanerne, når man er rullet forbi den, ellers nederst – så den ikke dækker "til toppen"-knappen.
 - **0.1.43** – Knaprækken Nulstil/Søg svæver nu altid nederst på skærmen, også når man ruller ned i søgeresultatet, og den følger lys/mørk tilstand.
