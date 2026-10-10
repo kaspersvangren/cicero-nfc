@@ -857,6 +857,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         fun pinSetting(msg: String) {
             LogBuf.add("Pinkode-krav: ${scrub(msg)}")
         }
+
+        @JavascriptInterface
+        fun tweak(msg: String) {
+            LogBuf.add("Tilpasning: ${scrub(msg)}")
+        }
     }
 
     /** Holder øje med, om Ciceros pinkode-felt vælges. Slået fra = Cicero opfører sig som før. */
@@ -1412,59 +1417,117 @@ private val STICKY_BUTTONS_JS = """
 (function () {
   if (window.__cnfcSticky) return;
   window.__cnfcSticky = true;
+  var logged = {};
+  function log(m) { if (logged[m]) return; logged[m] = 1; try { CiceroNFC.tweak(m); } catch (e) {} }
   function txt(el) { return ((el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim(); }
-  function vis(el) { return el.offsetParent !== null; }
+  function vis(el) { return !!el && el.offsetParent !== null; }
   function solid(c) { return c && c !== 'transparent' && !/rgba\([^)]*,\s*0\)${'$'}/.test(c); }
   function bgOf(el) {
-    for (var e = el.parentElement; e && e.nodeType === 1; e = e.parentElement) {
+    for (var e = el; e && e.nodeType === 1; e = e.parentElement) {
       var c = getComputedStyle(e).backgroundColor;
       if (solid(c)) return c;
     }
     var b = getComputedStyle(document.body).backgroundColor;
     return solid(b) ? b : '#fff';
   }
-  function scrolls(el) {
-    for (var e = el.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
-      var o = getComputedStyle(e).overflowY;
-      if ((o === 'auto' || o === 'scroll') && e.scrollHeight > e.clientHeight + 1) return true;
-    }
-    return false;
-  }
-  function bottomBar() {
+  // Højden på Ciceros bundmenu (fast i bunden af skærmen), 0 hvis der ingen er
+  function navHeight() {
     var el = document.elementFromPoint(innerWidth / 2, innerHeight - 4);
     for (var e = el; e && e !== document.body; e = e.parentElement) {
-      var p = getComputedStyle(e).position;
-      if (p === 'fixed') {
+      if (e.hasAttribute && e.hasAttribute('data-cnfc-sticky')) return 0;
+      if (getComputedStyle(e).position === 'fixed') {
         var r = e.getBoundingClientRect();
         if (r.bottom >= innerHeight - 2 && r.height < innerHeight / 3) return Math.round(innerHeight - r.top);
       }
     }
     return 0;
   }
+  function scroller(el) {
+    for (var e = el.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      var o = getComputedStyle(e).overflowY;
+      if ((o === 'auto' || o === 'scroll') && e.scrollHeight > e.clientHeight + 1) return e;
+    }
+    return null;
+  }
+  function names(el) {
+    var out = [], bs = el.querySelectorAll('button');
+    for (var i = 0; i < bs.length && out.length < 5; i++) { var t = txt(bs[i]); if (t && t.length <= 20) out.push(t); }
+    return out.join(', ');
+  }
+  // Rækken med Nulstil og Søg
+  function rowOf(b) {
+    for (var row = b.parentElement, n = 0; row && n < 4; row = row.parentElement, n++) {
+      var inner = row.querySelectorAll('button');
+      for (var j = 0; j < inner.length; j++) if (inner[j] !== b && /^s[øo]g${'$'}/i.test(txt(inner[j]))) return row;
+    }
+    return null;
+  }
+  // Hele bunden af kortet (med stregen): gå op, så længe boksen ikke bliver meget højere
+  function footerOf(row) {
+    var el = row;
+    for (var k = 0; k < 6; k++) {
+      var p = el.parentElement;
+      if (!p || p === document.body || p === document.documentElement) break;
+      if (p.getBoundingClientRect().height > el.getBoundingClientRect().height + 80) break;
+      el = p;
+    }
+    return el;
+  }
+  function makeSticky(f) {
+    var nav = navHeight();
+    var sc = scroller(f);
+    var bottom = sc ? Math.max(0, Math.round(sc.getBoundingClientRect().bottom - (innerHeight - nav))) : nav;
+    f.__cnfcNav = nav;
+    f.setAttribute('data-cnfc-sticky', 'sticky');
+    f.style.position = 'sticky';
+    f.style.bottom = bottom + 'px';
+    f.style.zIndex = '5';
+    f.style.boxShadow = '0 -1px 0 rgba(128,128,128,0.35)';
+  }
+  function makeFixed(f) {
+    var sp = document.createElement('div');
+    sp.setAttribute('data-cnfc-spacer', '1');
+    sp.style.height = f.offsetHeight + 'px';
+    f.parentElement.insertBefore(sp, f);
+    f.__cnfcSpacer = sp;
+    f.setAttribute('data-cnfc-sticky', 'fixed');
+    f.style.position = 'fixed';
+    f.style.bottom = (f.__cnfcNav || 0) + 'px';
+    log('Knaprækken følger ikke med af sig selv – lagt fast i bunden af skærmen');
+  }
+  function check(f) {
+    var mode = f.getAttribute('data-cnfc-sticky');
+    if (mode === 'sticky') {
+      var limit = innerHeight - (f.__cnfcNav || 0);
+      var r = f.getBoundingClientRect(), p = f.parentElement.getBoundingClientRect();
+      // Kortet når ind på skærmen, men bunden af det står stadig under kanten: klæbende virker ikke her
+      if (p.top < limit - 60 && r.top > limit + 1) makeFixed(f);
+    } else if (mode === 'fixed') {
+      var sp = f.__cnfcSpacer;
+      if (!sp || !sp.isConnected) return;
+      var pr = sp.parentElement.getBoundingClientRect();
+      f.style.left = Math.round(pr.left) + 'px';
+      f.style.width = Math.round(pr.width) + 'px';
+      f.style.visibility = vis(sp) ? '' : 'hidden';
+    }
+  }
   function scan() {
     var bs = document.querySelectorAll('button');
     for (var i = 0; i < bs.length; i++) {
       var b = bs[i];
-      if (!/^nulstil${'$'}/i.test(txt(b)) || !vis(b)) continue;
+      if (!/^nulstil${'$'}/i.test(txt(b))) continue;
       if (b.closest('.cdk-overlay-container')) continue;
-      var row = b.parentElement, n = 0, found = false;
-      while (row && n < 4) {
-        var inner = row.querySelectorAll('button');
-        for (var j = 0; j < inner.length; j++) if (inner[j] !== b && /^s[øo]g${'$'}/i.test(txt(inner[j]))) { found = true; break; }
-        if (found) break;
-        row = row.parentElement; n++;
+      var f = b.closest('[data-cnfc-sticky]');
+      if (!f) {
+        if (!vis(b)) continue;
+        var row = rowOf(b);
+        if (!row) { log('Nulstil fundet, men ingen Søg-knap ved siden af'); continue; }
+        f = footerOf(row);
+        makeSticky(f);
+        log('Knaprække fundet (' + names(f) + ')');
       }
-      if (!found || !row) continue;
-      if (!row.hasAttribute('data-cnfc-sticky')) {
-        row.setAttribute('data-cnfc-sticky', '1');
-        row.style.position = 'sticky';
-        row.style.bottom = (scrolls(row) ? 0 : bottomBar()) + 'px';
-        row.style.zIndex = '5';
-        row.style.paddingTop = '6px';
-        row.style.paddingBottom = '6px';
-        row.style.boxShadow = '0 -1px 0 rgba(128,128,128,0.35)';
-      }
-      row.style.background = bgOf(row);
+      f.style.background = bgOf(f);
+      check(f);
     }
   }
   scan();
