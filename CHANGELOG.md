@@ -1,6 +1,6 @@
 # Ændringer
 
-- **Næste version** – Kontakten "Pinkode" ved "Send kvittering" i udlånsbilledet slår Ciceros krav om pinkode ved udlån til og fra med ét tryk. Undersøgelsen i loggen er fjernet igen.
+- **0.1.35** – Kontakten "Pinkode" ved "Send kvittering" i udlånsbilledet slår Ciceros krav om pinkode ved udlån til og fra med ét tryk. Undersøgelsen i loggen er fjernet igen.
 - **0.1.34** – Undersøgelsen af pinkode-indstillingen fanger nu også navne med "code".
 - **0.1.33** – Tekststørrelse som i Chrome (følger ikke længere telefonens skriftstørrelse). Midlertidig undersøgelse i loggen af, hvor Cicero gemmer "Pinkode påkrævet ved udlån".
 - **0.1.32** – Fanerækken øverst i Cicero (fx Bookinger, Fjernlån) kan swipes; pilene er væk. Pinkode-tastaturet nulstiller ikke længere cifrene, hvis Cicero åbner det to gange. Overflødig kode fjernet.
