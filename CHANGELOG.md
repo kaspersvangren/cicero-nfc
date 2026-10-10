@@ -1,6 +1,6 @@
 # Ændringer
 
-- **Næste version** – Kameraet i værktøjet: 2× zoom og tryk for skarpt billede, større billede til genkendelsen, tal i rammen øverst, og halve numre (fx uden første ciffer) vises ikke. Ingen "ingen understøttede apps"-besked, når bogen er tæt på. Menu og dialoger lukkes, når app'en låser.
+- **0.1.38** – Kameraet i værktøjet: 2× zoom og tryk for skarpt billede, større billede til genkendelsen, tal i rammen øverst, og halve numre (fx uden første ciffer) vises ikke. Ingen "ingen understøttede apps"-besked, når bogen er tæt på. Menu og dialoger lukkes, når app'en låser.
 - **0.1.37** – Værktøj til tags (menuen ⋮): se indhold, alarm til/fra, nulstil, og programmér chips – materialenummer tastes eller læses med kameraet (stregkode eller tal); sæt del for del. Biblioteksnummer kan indstilles. Fokus-ringen på pinkode-kontakten er væk.
 - **0.1.36** – Pinkode-kontakten står på linje med "Send kvittering", vises kun under Udlån, og Enhedsindstillinger skjules, mens den skifter.
 - **0.1.35** – Kontakten "Pinkode" ved "Send kvittering" i udlånsbilledet slår Ciceros krav om pinkode ved udlån til og fra med ét tryk. Undersøgelsen i loggen er fjernet igen.
