@@ -719,7 +719,6 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(6), 0, dp(10))
-            minimumWidth = dp(230)
         }
         val win = PopupWindow(col, LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, true).apply {
             setBackgroundDrawable(GradientDrawable().apply { setColor(pal.logBg); cornerRadius = dp(12).toFloat() })
@@ -727,34 +726,44 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             setOnDismissListener { if (openMenu === this) openMenu = null }
         }
         val ripple = android.util.TypedValue().also { theme.resolveAttribute(android.R.attr.selectableItemBackground, it, true) }.resourceId
-        fun item(label: String, action: () -> Unit) {
+        // Grå ikoner, så teksten stadig er det, man ser først
+        fun icon(res: Int, color: Int) = getDrawable(res)?.mutate()?.apply {
+            setBounds(0, 0, dp(20), dp(20))
+            setTint(color)
+        }
+        fun item(label: String, iconRes: Int, action: () -> Unit) {
             col.addView(TextView(this).apply {
                 text = label
-                textSize = 16f
+                textSize = 15f
                 setTextColor(pal.text)
-                setPadding(dp(18), dp(12), dp(24), dp(12))
+                setCompoundDrawablesRelative(icon(iconRes, pal.sub), null, null, null)
+                compoundDrawablePadding = dp(14)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), dp(10), dp(22), dp(10))
                 setBackgroundResource(ripple)
                 setOnClickListener { win.dismiss(); action() }
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         }
-        item(if (logScroll.visibility == View.VISIBLE) "Skjul log" else "Vis log") { toggleLog() }
-        item("Del log") { shareLog() }
-        item("Genindlæs Cicero") { web.reload() }
-        if (isDeviceSecure()) item("Lås nu") { lock() }
-        item("Indstillinger") { showSettings() }
-        item("Søg efter opdatering") { checkForUpdateNow() }
-        item("Ændringer") { showChangelog() }
-        item("Om Cicero NFC") { showAbout() }
+        item(if (logScroll.visibility == View.VISIBLE) "Skjul log" else "Vis log", R.drawable.ic_menu_log) { toggleLog() }
+        item("Del log", R.drawable.ic_menu_share) { shareLog() }
+        item("Genindlæs Cicero", R.drawable.ic_menu_reload) { web.reload() }
+        if (isDeviceSecure()) item("Lås nu", R.drawable.ic_menu_lock) { lock() }
+        item("Indstillinger", R.drawable.ic_menu_settings) { showSettings() }
+        item("Søg efter opdatering", R.drawable.ic_menu_update) { checkForUpdateNow() }
+        item("Ændringer", R.drawable.ic_menu_changes) { showChangelog() }
+        item("Om Cicero NFC", R.drawable.ic_menu_info) { showAbout() }
         col.addView(View(this).apply { setBackgroundColor(pal.line) },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply { topMargin = dp(6); bottomMargin = dp(10) })
         col.addView(TextView(this).apply {
             text = "Værktøj til tags"
-            textSize = 16f
+            textSize = 15f
+            setCompoundDrawablesRelative(icon(R.drawable.ic_menu_nfc, Color.WHITE), null, null, null)
+            compoundDrawablePadding = dp(8)
             typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             background = GradientDrawable().apply { setColor(pal.blue); cornerRadius = dp(22).toFloat() }
-            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setPadding(dp(16), dp(10), dp(16), dp(10))
             setOnClickListener {
                 win.dismiss()
                 if (userUnlocked || !isDeviceSecure()) openTagTool() else {
@@ -837,6 +846,9 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     "Apache License 2.0\n\n" +
                     "AndroidX (Activity, CameraX)\n" +
                     "Copyright The Android Open Source Project\n" +
+                    "Apache License 2.0\n\n" +
+                    "Material Icons (ikonerne i menuen)\n" +
+                    "Copyright Google LLC\n" +
                     "Apache License 2.0\n\n" +
                     "Google ML Kit (tekst- og stregkodegenkendelse via Google Play-tjenester)\n" +
                     "ML Kit Terms of Service: https://developers.google.com/ml-kit/terms\n\n" +

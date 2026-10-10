@@ -1,5 +1,6 @@
 # Ændringer
 
+- **Næste version** – Ikoner ved punkterne i menuen ⋮, og menuen er smallere.
 - **0.1.47** – Værktøj til tags er en blå knap nederst i menuen ⋮, adskilt fra listen. Menuen følger Ciceros lyse/mørke farver.
 - **0.1.46** – Nulstil/Søg ligger nu altid nederst som en lille pille over bundmenuen (en kopi, der trykker på Ciceros egne knapper). "Til toppen" og plus-knappen er fri.
 - **0.1.45** – Den svævende knaprække står rigtigt: lige under fanerne eller lige over bundmenuen, i søgekortets bredde og over Ciceros egne elementer.
