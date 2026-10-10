@@ -48,7 +48,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.PopupMenu
+import android.widget.PopupWindow
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
@@ -381,7 +381,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     }
 
     // Menu og dialoger ligger i egne vinduer over låseskærmen – de lukkes, når app'en låser
-    private var openMenu: PopupMenu? = null
+    private var openMenu: PopupWindow? = null
     private val dialogs = ArrayList<AlertDialog>()
 
     private fun AlertDialog.Builder.track(): AlertDialog {
@@ -710,38 +710,64 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         }
     }
 
+    /**
+     * Menuen ⋮: en liste i Ciceros farver og nederst en knap til Værktøj til tags (adskilt fra listen,
+     * så den ikke rammes ved en fejl). Lukker ved tryk udenfor, og når app'en låser.
+     */
     private fun showMenu(anchor: View) {
-        val m = PopupMenu(this, anchor)
-        openMenu = m
-        m.setOnDismissListener { if (openMenu === m) openMenu = null }
-        m.menu.add(0, 1, 0, if (logScroll.visibility == View.VISIBLE) "Skjul log" else "Vis log")
-        m.menu.add(0, 2, 1, "Del log")
-        m.menu.add(0, 3, 2, "Genindlæs Cicero")
-        if (isDeviceSecure()) m.menu.add(0, 6, 3, "Lås nu")
-        m.menu.add(0, 11, 4, "Værktøj til tags")
-        m.menu.add(0, 5, 5, "Indstillinger")
-        m.menu.add(0, 7, 6, "Søg efter opdatering")
-        m.menu.add(0, 8, 7, "Ændringer")
-        m.menu.add(0, 4, 8, "Om Cicero NFC")
-        m.setOnMenuItemClickListener {
-            when (it.itemId) {
-                1 -> toggleLog()
-                2 -> shareLog()
-                3 -> web.reload()
-                4 -> showAbout()
-                5 -> showSettings()
-                6 -> lock()
-                7 -> checkForUpdateNow()
-                8 -> showChangelog()
-                11 -> if (userUnlocked || !isDeviceSecure()) openTagTool() else {
+        openMenu?.dismiss()
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(6), 0, dp(10))
+            minimumWidth = dp(230)
+        }
+        val win = PopupWindow(col, LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, true).apply {
+            setBackgroundDrawable(GradientDrawable().apply { setColor(pal.logBg); cornerRadius = dp(12).toFloat() })
+            elevation = dp(8).toFloat()
+            setOnDismissListener { if (openMenu === this) openMenu = null }
+        }
+        val ripple = android.util.TypedValue().also { theme.resolveAttribute(android.R.attr.selectableItemBackground, it, true) }.resourceId
+        fun item(label: String, action: () -> Unit) {
+            col.addView(TextView(this).apply {
+                text = label
+                textSize = 16f
+                setTextColor(pal.text)
+                setPadding(dp(18), dp(12), dp(24), dp(12))
+                setBackgroundResource(ripple)
+                setOnClickListener { win.dismiss(); action() }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+        item(if (logScroll.visibility == View.VISIBLE) "Skjul log" else "Vis log") { toggleLog() }
+        item("Del log") { shareLog() }
+        item("Genindlæs Cicero") { web.reload() }
+        if (isDeviceSecure()) item("Lås nu") { lock() }
+        item("Indstillinger") { showSettings() }
+        item("Søg efter opdatering") { checkForUpdateNow() }
+        item("Ændringer") { showChangelog() }
+        item("Om Cicero NFC") { showAbout() }
+        col.addView(View(this).apply { setBackgroundColor(pal.line) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply { topMargin = dp(6); bottomMargin = dp(10) })
+        col.addView(TextView(this).apply {
+            text = "Værktøj til tags"
+            textSize = 16f
+            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply { setColor(pal.blue); cornerRadius = dp(22).toFloat() }
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setOnClickListener {
+                win.dismiss()
+                if (userUnlocked || !isDeviceSecure()) openTagTool() else {
                     // Fx låst op af login-siden: værktøjet kan ændre tags, så telefonens lås kræves først
                     openToolAfterUnlock = true
                     authenticate()
                 }
             }
-            true
-        }
-        m.show()
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            marginStart = dp(12); marginEnd = dp(12)
+        })
+        openMenu = win
+        win.showAsDropDown(anchor, 0, 0, Gravity.END)
     }
 
     /** Alle til/fra-indstillinger samlet ét sted. Ændringer gælder med det samme. */
