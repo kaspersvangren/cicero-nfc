@@ -15,6 +15,9 @@ import kotlin.math.sin
 object Beeper {
     private const val RATE = 44_100
 
+    /** Slås fra i Indstillinger (fx når telefonen spiller over bluetooth); vibrationen påvirkes ikke */
+    @Volatile var enabled = true
+
     class Note(val atMs: Int, val freq: Double, val ms: Int)
 
     /**
@@ -23,6 +26,7 @@ object Beeper {
      * Toner må overlappe, så den første stadig klinger, når den næste slår an.
      */
     fun chime(vararg notes: Note) {
+        if (!enabled) return
         thread(isDaemon = true) {
             try {
                 val totalMs = notes.maxOf { it.atMs + it.ms }
@@ -76,6 +80,7 @@ object Beeper {
 
     /** Par af (frekvens i Hz, varighed i ms). Frekvens 0 = pause. */
     fun play(vararg tones: Pair<Int, Int>) {
+        if (!enabled) return
         thread(isDaemon = true) {
             try {
                 val total = tones.sumOf { it.second } * RATE / 1000

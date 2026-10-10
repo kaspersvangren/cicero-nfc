@@ -55,9 +55,9 @@ Mens værktøjet er åbent, får Cicero ikke besked om tags.
 
 - Fanerækken øverst kan swipes.
 - Kontakten "Pinkode" ved "Send kvittering" i udlånsbilledet.
-- Knaprækken Nulstil/Søg under søgeformularer svæver nederst på skærmen, også i lange søgeresultater.
+- Knaprækken Nulstil/Søg under søgeformularer er altid på skærmen: nederst, før man når den, og øverst under fanerne, når man er rullet forbi den.
 
-App'en ændrer kun udseendet; Ciceros data og logik røres ikke. Alle tre slås til og fra på én gang i menuen ⋮ → Tilpasninger af Cicero (fx før en fejl meldes til Systematic).
+App'en ændrer kun udseendet; Ciceros data og logik røres ikke. Alle tre slås til og fra på én gang i menuen ⋮ → Indstillinger → Tilpasninger af Cicero (fx før en fejl meldes til Systematic).
 
 ## Data og sikkerhed
 

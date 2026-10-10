@@ -68,6 +68,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         const val PREF_PIN_PAD = "pinPad"
         const val PREF_PIN_FLIP = "pinPadFlip"
         const val PREF_TWEAKS = "ciceroTweaks" // app'ens ændringer af Ciceros udseende
+        const val PREF_SOUND = "sound"
         const val PREF_PIN_BIG = "pinPadBig"
     }
 
@@ -154,6 +155,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         super.onCreate(savedInstanceState)
         Hub.start(applicationContext)
         Hub.configuredLibrary = getSharedPreferences("ui", MODE_PRIVATE).getString(Hub.PREF_LIBRARY, null)
+        Beeper.enabled = getSharedPreferences("ui", MODE_PRIVATE).getBoolean(PREF_SOUND, true)
         nfc = NfcAdapter.getDefaultAdapter(this)
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val saved = prefs().getString("ciceroTheme", null)
@@ -716,19 +718,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         m.menu.add(0, 2, 1, "Del log")
         m.menu.add(0, 3, 2, "Genindlæs Cicero")
         if (isDeviceSecure()) m.menu.add(0, 6, 3, "Lås nu")
-        m.menu.add(0, 9, 4, "Pinkode-tastatur").apply {
-            isCheckable = true
-            isChecked = prefs().getBoolean(PREF_PIN_PAD, true)
-        }
-        m.menu.add(0, 10, 5, "Vend pinkode-tastatur").apply {
-            isCheckable = true
-            isChecked = prefs().getBoolean(PREF_PIN_FLIP, false)
-        }
-        m.menu.add(0, 12, 6, "Tilpasninger af Cicero").apply {
-            isCheckable = true
-            isChecked = prefs().getBoolean(PREF_TWEAKS, true)
-        }
-        m.menu.add(0, 11, 6, "Værktøj til tags")
+        m.menu.add(0, 11, 4, "Værktøj til tags")
+        m.menu.add(0, 5, 5, "Indstillinger")
         m.menu.add(0, 7, 6, "Søg efter opdatering")
         m.menu.add(0, 8, 7, "Ændringer")
         m.menu.add(0, 4, 8, "Om Cicero NFC")
@@ -738,23 +729,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 2 -> shareLog()
                 3 -> web.reload()
                 4 -> showAbout()
+                5 -> showSettings()
                 6 -> lock()
                 7 -> checkForUpdateNow()
                 8 -> showChangelog()
-                9 -> {
-                    val on = !prefs().getBoolean(PREF_PIN_PAD, true)
-                    prefs().edit().putBoolean(PREF_PIN_PAD, on).apply()
-                    LogBuf.add(if (on) "Pinkode-tastatur slået til" else "Pinkode-tastatur slået fra")
-                    injectPinWatcher()
-                }
-                10 -> toggleFlip()
-                12 -> {
-                    // Swipe-faner, pinkode-kontakten og knaprækken. Slås fra fx før en fejl meldes til Systematic.
-                    val on = !prefs().getBoolean(PREF_TWEAKS, true)
-                    prefs().edit().putBoolean(PREF_TWEAKS, on).apply()
-                    LogBuf.add(if (on) "Tilpasninger af Cicero slået til" else "Tilpasninger af Cicero slået fra – Cicero vises som standard")
-                    web.reload()
-                }
                 11 -> if (userUnlocked || !isDeviceSecure()) openTagTool() else {
                     // Fx låst op af login-siden: værktøjet kan ændre tags, så telefonens lås kræves først
                     openToolAfterUnlock = true
@@ -764,6 +742,49 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             true
         }
         m.show()
+    }
+
+    /** Alle til/fra-indstillinger samlet ét sted. Ændringer gælder med det samme. */
+    private fun showSettings() {
+        val labels = arrayOf(
+            "Lyd ved alarmskift",
+            "Pinkode-tastatur",
+            "Vend pinkode-tastatur",
+            "Tilpasninger af Cicero",
+        )
+        val checked = booleanArrayOf(
+            prefs().getBoolean(PREF_SOUND, true),
+            prefs().getBoolean(PREF_PIN_PAD, true),
+            prefs().getBoolean(PREF_PIN_FLIP, false),
+            prefs().getBoolean(PREF_TWEAKS, true),
+        )
+        var tweaksChanged = false
+        AlertDialog.Builder(this)
+            .setTitle("Indstillinger")
+            .setMultiChoiceItems(labels, checked) { _, which, on ->
+                when (which) {
+                    0 -> {
+                        prefs().edit().putBoolean(PREF_SOUND, on).apply()
+                        Beeper.enabled = on
+                        LogBuf.add(if (on) "Lyd slået til" else "Lyd slået fra")
+                    }
+                    1 -> {
+                        prefs().edit().putBoolean(PREF_PIN_PAD, on).apply()
+                        LogBuf.add(if (on) "Pinkode-tastatur slået til" else "Pinkode-tastatur slået fra")
+                        injectPinWatcher()
+                    }
+                    2 -> if (prefs().getBoolean(PREF_PIN_FLIP, false) != on) toggleFlip()
+                    3 -> {
+                        // Swipe-faner, pinkode-kontakten og knaprækken. Slås fra fx før en fejl meldes til Systematic.
+                        prefs().edit().putBoolean(PREF_TWEAKS, on).apply()
+                        LogBuf.add(if (on) "Tilpasninger af Cicero slået til" else "Tilpasninger af Cicero slået fra – Cicero vises som standard")
+                        tweaksChanged = !tweaksChanged
+                    }
+                }
+            }
+            .setPositiveButton("Luk", null)
+            .setOnDismissListener { if (tweaksChanged) web.reload() }
+            .track()
     }
 
     private fun showAbout() {
@@ -1533,33 +1554,65 @@ private val STICKY_BUTTONS_JS = """
       }
     });
   }
-  // Står knaprækken på sin plads og kan ses, bliver den der. Ellers svæver den nederst på skærmen
-  // (over Ciceros bundmenu) – også når man ruller ned i et langt søgeresultat.
+  function scroller(el) {
+    for (var e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      var o = getComputedStyle(e).overflowY;
+      if ((o === 'auto' || o === 'scroll') && e.scrollHeight > e.clientHeight + 1) return e;
+    }
+    return null;
+  }
+  // Øverste synlige linje under Ciceros top (fx fanerækken, der bliver stående, når man ruller)
+  function topLimit(from) {
+    var sc = scroller(from);
+    var top = sc ? Math.max(0, sc.getBoundingClientRect().top) : 0;
+    for (var k = 0; k < 3; k++) {
+      var el = document.elementFromPoint(innerWidth / 2, top + 2), moved = false;
+      for (var e = el; e && e !== document.body; e = e.parentElement) {
+        if (e.hasAttribute && e.hasAttribute('data-cnfc-bar')) break;
+        var p = getComputedStyle(e).position;
+        if (p === 'fixed' || p === 'sticky') {
+          var r = e.getBoundingClientRect();
+          if (r.top <= top + 2 && r.bottom > top + 2 && r.height < innerHeight / 3) { top = Math.round(r.bottom); moved = true; }
+          break;
+        }
+      }
+      if (!moved) break;
+    }
+    return top;
+  }
+  function setMode(bar, mode) {
+    var f = bar.f, sp = bar.spacer;
+    if (bar.mode === mode) return;
+    if (mode === 'home') {
+      sp.style.display = 'none';
+      f.style.position = ''; f.style.left = ''; f.style.width = ''; f.style.top = ''; f.style.bottom = ''; f.style.boxShadow = '';
+    } else {
+      if (bar.mode === 'home') { sp.style.height = f.offsetHeight + 'px'; sp.style.display = ''; }
+      f.style.position = 'fixed';
+      f.style.zIndex = '5';
+      var line = 'var(--cnfc-line, rgba(128,128,128,0.35))';
+      f.style.boxShadow = mode === 'top' ? '0 1px 0 ' + line : '0 -1px 0 ' + line;
+    }
+    bar.mode = mode;
+  }
+  // Står knaprækken på sin plads og kan ses, bliver den der. Er pladsen rullet op over skærmen, sætter
+  // den sig øverst (under fanerne); er pladsen længere nede, sætter den sig nederst (over bundmenuen).
+  // Den glider derfor uden hop og er altid på skærmen – også i et langt søgeresultat.
   function place(bar) {
     var f = bar.f, sp = bar.spacer;
     if (!f.isConnected) return false;
     if (!sp.isConnected || !vis(sp.parentElement)) { f.style.visibility = 'hidden'; return true; }
     f.style.visibility = '';
-    var nav = navHeight(), limit = innerHeight - nav;
-    var home = (bar.floating ? sp : f).getBoundingClientRect();
-    var fits = home.top >= 0 && home.bottom <= limit;
-    if (fits && bar.floating) {
-      bar.floating = false;
-      sp.style.display = 'none';
-      f.style.position = ''; f.style.left = ''; f.style.width = ''; f.style.bottom = ''; f.style.boxShadow = '';
-    } else if (!fits) {
-      if (!bar.floating) {
-        bar.floating = true;
-        sp.style.height = f.offsetHeight + 'px';
-        sp.style.display = '';
-        f.style.position = 'fixed';
-        f.style.zIndex = '5';
-        f.style.boxShadow = '0 -1px 0 var(--cnfc-line, rgba(128,128,128,0.35))';
-      }
+    var bottom = innerHeight - navHeight(), top = topLimit(sp.parentElement);
+    var home = (bar.mode === 'home' ? f : sp).getBoundingClientRect();
+    var mode = home.top < top ? 'top' : (home.bottom > bottom ? 'bottom' : 'home');
+    setMode(bar, mode);
+    if (mode !== 'home') {
       var pr = sp.parentElement.getBoundingClientRect();
       f.style.left = Math.round(Math.max(0, pr.left)) + 'px';
       f.style.width = Math.round(Math.min(innerWidth, pr.right) - Math.max(0, pr.left)) + 'px';
-      f.style.bottom = nav + 'px';
+      if (mode === 'top') { f.style.top = top + 'px'; f.style.bottom = ''; }
+      else { f.style.bottom = (innerHeight - bottom) + 'px'; f.style.top = ''; }
     }
     f.style.background = 'var(--cnfc-card, transparent)';
     return true;
@@ -1579,7 +1632,7 @@ private val STICKY_BUTTONS_JS = """
       var sp = document.createElement('div');
       sp.style.display = 'none';
       f.parentElement.insertBefore(sp, f);
-      bars.push({ f: f, spacer: sp, floating: false });
+      bars.push({ f: f, spacer: sp, mode: 'home' });
       log('Knaprække fundet (' + names(f) + ')');
     }
     placeAll();
