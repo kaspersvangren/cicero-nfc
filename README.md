@@ -42,12 +42,22 @@ Hold bogen mod bagsiden af telefonen:
 
 Mens værktøjet er åbent, får Cicero ikke besked om tags.
 
-- Viser hvad der står på et tag: materialenummer, del x af y, alarm, bibliotek og chiptype.
+- Viser hvad der står på et tag: materialenummer, del x af y, alarm, bibliotek og chiptype – hvert felt for sig, fejl i rødt.
+  Når chippen fjernes, står det som "Sidst læst" i 10 sekunder.
 - **Alarm til/fra** i hånden og **Nulstil tag** (helt tom som en ny chip; spørger først).
 - **Programmér chip**: materialenummer tastes eller læses med kameraet (stregkode eller trykte tal).
+  Kameraet sætter numre med samme længde som jeres materialenumre øverst (app'en husker kun længden).
   Sæt programmeres del for del, én chip ad gangen. Efter programmering er alarmen slået til.
 - **Biblioteksnummer** indstilles i værktøjet og skrives på nye chips sammen med DK.
 - App'en sender aldrig lås-kommandoer til et tag (de kan ikke fortrydes).
+
+## Tilpasninger af Cicero
+
+- Fanerækken øverst kan swipes.
+- Kontakten "Pinkode" ved "Send kvittering" i udlånsbilledet.
+- Knaprækken Nulstil/Søg under søgeformularer bliver i bunden af skærmen.
+
+App'en ændrer kun udseendet; Ciceros data og logik røres ikke.
 
 ## Data og sikkerhed
 

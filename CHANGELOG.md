@@ -1,5 +1,6 @@
 # Ændringer
 
+- **Næste version** – Værktøjet viser et læst tag i felter (materialenummer stort; del, alarm, bibliotek og chip hver for sig; fejl i rødt), og det forsvinder 10 sekunder efter chippen er fjernet. Tydeligere advarsel ved Nulstil. Kameraet sætter numre med jeres længde øverst og ISBN, datoer og tal med bindestreg nederst. Knaprækken Nulstil/Søg under søgeformularer bliver i bunden af skærmen.
 - **0.1.38** – Kameraet i værktøjet: 2× zoom og tryk for skarpt billede, større billede til genkendelsen, tal i rammen øverst, og halve numre (fx uden første ciffer) vises ikke. Ingen "ingen understøttede apps"-besked, når bogen er tæt på. Menu og dialoger lukkes, når app'en låser.
 - **0.1.37** – Værktøj til tags (menuen ⋮): se indhold, alarm til/fra, nulstil, og programmér chips – materialenummer tastes eller læses med kameraet (stregkode eller tal); sæt del for del. Biblioteksnummer kan indstilles. Fokus-ringen på pinkode-kontakten er væk.
 - **0.1.36** – Pinkode-kontakten står på linje med "Send kvittering", vises kun under Udlån, og Enhedsindstillinger skjules, mens den skifter.

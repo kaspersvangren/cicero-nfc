@@ -53,7 +53,10 @@ class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         private val DIGITS = Regex("""(?<![0-9])[0-9](?:[ \-]?[0-9]){7,15}(?![0-9])""")
     }
 
-    private class Candidate(val value: String, val barcode: Boolean, var lastSeen: Long, var hits: Int, var inFrame: Int)
+    private class Candidate(val value: String, val barcode: Boolean, var lastSeen: Long, var hits: Int, var inFrame: Int) {
+        var clean = 0      // set uden bindestreg/mellemrum
+        var isbnHint = false
+    }
 
     private lateinit var executor: ExecutorService
     // Lukkes skærmen midt i en genkendelse, må det sene svar ikke få app'en til at gå ned
@@ -68,6 +71,8 @@ class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     private var lastUiUpdate = 0L
     private var notReadyLogged = false
     private var zoomed = true
+    // Den længde jeres materialenumre plejer at have (lært fra læste tags); null = ikke set endnu
+    private val itemLen by lazy { Hub.itemLength() }
     private lateinit var camBox: FrameLayout
     private val nfc by lazy { NfcAdapter.getDefaultAdapter(this) }
     // Sigte-rammens størrelse på skærmen
@@ -234,15 +239,16 @@ class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
             if (tb.isSuccessful) {
                 for (b in tb.result) {
                     val v = b.rawValue?.trim() ?: continue
-                    if (v.length in 1..16 && v.all { it.code in 0x21..0x7E }) add(v, true, now, inside(b.boundingBox))
+                    if (v.length in 1..16 && v.all { it.code in 0x21..0x7E }) add(v, true, now, inside(b.boundingBox), true, false)
                 }
             }
             if (tt.isSuccessful) {
                 for (block in tt.result.textBlocks) for (line in block.lines) {
                     val inF = inside(line.boundingBox)
+                    val isbnLine = line.text.contains("ISBN", ignoreCase = true)
                     for (m in DIGITS.findAll(line.text)) {
                         val v = m.value.filter { it.isDigit() }
-                        if (v.length in 8..16) add(v, false, now, inF)
+                        if (v.length in 8..16) add(v, false, now, inF, m.value.all { it.isDigit() }, isbnLine)
                     }
                 }
             } else if (!notReadyLogged) {
@@ -258,12 +264,29 @@ class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         }
     }
 
-    private fun add(v: String, barcode: Boolean, now: Long, inFrame: Boolean) {
+    private fun add(v: String, barcode: Boolean, now: Long, inFrame: Boolean, clean: Boolean, isbnHint: Boolean) {
         synchronized(candidates) {
-            val c = candidates[v]
-            if (c == null) candidates[v] = Candidate(v, barcode, now, 1, if (inFrame) 1 else 0)
-            else { c.lastSeen = now; c.hits++; if (inFrame) c.inFrame++ }
+            val c = candidates.getOrPut(v) { Candidate(v, barcode, now, 0, 0) }
+            c.lastSeen = now; c.hits++
+            if (inFrame) c.inFrame++
+            if (clean) c.clean++
+            if (isbnHint) c.isbnHint = true
         }
+    }
+
+    private fun isIsbn(c: Candidate) =
+        (c.value.length == 13 && (c.value.startsWith("978") || c.value.startsWith("979"))) ||
+            (c.isbnHint && c.value.length in setOf(10, 13))
+
+    /**
+     * 0 = ligner jeres materialenumre (rigtig længde, kun cifre), 1 = almindeligt nummer,
+     * 2 = næppe et materialenummer (ISBN, dato eller tal med bindestreg/mellemrum). Alt vises – kun rækkefølgen ændres.
+     */
+    private fun tier(c: Candidate): Int = when {
+        isIsbn(c) -> 2
+        !c.barcode && c.clean == 0 -> 2
+        itemLen != null && c.value.length == itemLen && c.value.all { it.isDigit() } -> 0
+        else -> 1
     }
 
     private fun showCandidates() {
@@ -274,8 +297,13 @@ class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
             // Tal skal ses mindst 2 gange (stregkoder har kontrolciffer), og et tal, der er en del af
             // et længere nummer (fx uden første ciffer), vises ikke
             val sure = candidates.values.filter { it.barcode || it.hits >= 2 }
-            sure.filter { c -> sure.none { o -> o !== c && o.value.length > c.value.length && o.value.contains(c.value) } }
-                .sortedWith(compareByDescending<Candidate> { it.barcode }.thenByDescending { it.inFrame }.thenByDescending { it.hits })
+            sure.filter { c ->
+                sure.none { o ->
+                    o !== c && o.value.length > c.value.length && o.value.length - c.value.length <= 2 &&
+                        o.value.contains(c.value) && tier(o) <= tier(c)
+                }
+            }
+                .sortedWith(compareBy<Candidate> { tier(it) }.thenByDescending { it.barcode }.thenByDescending { it.inFrame }.thenByDescending { it.hits })
                 .take(5)
         }
         list.removeAllViews()
@@ -283,7 +311,13 @@ class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         val key = if (dark) Color.parseColor("#4B4B4B") else Color.parseColor("#E0E0E0")
         for (c in shown) {
             list.addView(TextView(this).apply {
-                text = c.value + if (c.barcode) "   · stregkode" else "   · tal"
+                val kind = when {
+                    isIsbn(c) -> "ISBN"
+                    tier(c) == 2 -> "andet tal"
+                    c.barcode -> "stregkode"
+                    else -> "tal"
+                }
+                text = c.value + "   · " + kind
                 textSize = 22f
                 typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                 setTextColor(fg)

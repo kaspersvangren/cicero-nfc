@@ -954,6 +954,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 injectPinWatcher()
                 web.evaluateJavascript(SWIPE_TABS_JS, null)
                 web.evaluateJavascript(PIN_TOGGLE_JS, null)
+                web.evaluateJavascript(STICKY_BUTTONS_JS, null)
                 handler.postDelayed({ detectCiceroTheme() }, 500)
             }
 
@@ -1400,6 +1401,75 @@ private val PIN_KEYBOARD_JS = """
   el.focus();
   setTimeout(function () { el.removeAttribute('data-cnfc-skip'); }, 300);
 })()
+"""
+
+/**
+ * Knaprækken under søgeformularer (Nulstil · Søg · +) står ofte under skærmkanten. Her bliver den
+ * klæbende i bunden af det, der rulles, så den altid kan nås. Står rækken allerede synligt, ændres intet.
+ * Findes knapperne ikke (andre navne), sker der ingenting.
+ */
+private val STICKY_BUTTONS_JS = """
+(function () {
+  if (window.__cnfcSticky) return;
+  window.__cnfcSticky = true;
+  function txt(el) { return ((el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim(); }
+  function vis(el) { return el.offsetParent !== null; }
+  function solid(c) { return c && c !== 'transparent' && !/rgba\([^)]*,\s*0\)${'$'}/.test(c); }
+  function bgOf(el) {
+    for (var e = el.parentElement; e && e.nodeType === 1; e = e.parentElement) {
+      var c = getComputedStyle(e).backgroundColor;
+      if (solid(c)) return c;
+    }
+    var b = getComputedStyle(document.body).backgroundColor;
+    return solid(b) ? b : '#fff';
+  }
+  function scrolls(el) {
+    for (var e = el.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      var o = getComputedStyle(e).overflowY;
+      if ((o === 'auto' || o === 'scroll') && e.scrollHeight > e.clientHeight + 1) return true;
+    }
+    return false;
+  }
+  function bottomBar() {
+    var el = document.elementFromPoint(innerWidth / 2, innerHeight - 4);
+    for (var e = el; e && e !== document.body; e = e.parentElement) {
+      var p = getComputedStyle(e).position;
+      if (p === 'fixed') {
+        var r = e.getBoundingClientRect();
+        if (r.bottom >= innerHeight - 2 && r.height < innerHeight / 3) return Math.round(innerHeight - r.top);
+      }
+    }
+    return 0;
+  }
+  function scan() {
+    var bs = document.querySelectorAll('button');
+    for (var i = 0; i < bs.length; i++) {
+      var b = bs[i];
+      if (!/^nulstil${'$'}/i.test(txt(b)) || !vis(b)) continue;
+      if (b.closest('.cdk-overlay-container')) continue;
+      var row = b.parentElement, n = 0, found = false;
+      while (row && n < 4) {
+        var inner = row.querySelectorAll('button');
+        for (var j = 0; j < inner.length; j++) if (inner[j] !== b && /^s[øo]g${'$'}/i.test(txt(inner[j]))) { found = true; break; }
+        if (found) break;
+        row = row.parentElement; n++;
+      }
+      if (!found || !row) continue;
+      if (!row.hasAttribute('data-cnfc-sticky')) {
+        row.setAttribute('data-cnfc-sticky', '1');
+        row.style.position = 'sticky';
+        row.style.bottom = (scrolls(row) ? 0 : bottomBar()) + 'px';
+        row.style.zIndex = '5';
+        row.style.paddingTop = '6px';
+        row.style.paddingBottom = '6px';
+        row.style.boxShadow = '0 -1px 0 rgba(128,128,128,0.35)';
+      }
+      row.style.background = bgOf(row);
+    }
+  }
+  scan();
+  setInterval(scan, 1000);
+})();
 """
 
 /**

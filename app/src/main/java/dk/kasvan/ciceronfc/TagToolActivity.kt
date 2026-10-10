@@ -16,6 +16,10 @@ import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.text.InputType
 import android.view.Gravity
 import android.view.MotionEvent
@@ -40,6 +44,7 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         private const val AFI_ON = 0x07   // sikret
         private const val AFI_OFF = 0xC2  // udlånt
         private const val PREF_LIBRARY = "library"
+        private const val FORGET_AFTER_MS = 10_000L // kortet forsvinder 10 sek. efter chippen er fjernet
     }
 
     private class Info(
@@ -64,6 +69,9 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     private val green = Color.parseColor("#2F855A")
     private val orange = Color.parseColor("#DD6B20")
     private val red = Color.parseColor("#C53030")
+    private val tileBg get() = if (dark) Color.parseColor("#454545") else Color.parseColor("#F2F5F7")
+    private val warnBg get() = if (dark) Color.parseColor("#5A2626") else Color.parseColor("#FDE8E8")
+    private val warnFg get() = if (dark) Color.parseColor("#FEB2B2") else Color.parseColor("#9B2C2C")
 
     private val exec = Executors.newSingleThreadScheduledExecutor()
     private val handler = Handler(Looper.getMainLooper())
@@ -79,10 +87,15 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     @Volatile private var info: Info? = null
     @Volatile private var present = false
     @Volatile private var pending: Pending? = null
+    @Volatile private var goneAt = 0L
 
     private lateinit var libraryText: TextView
+    private lateinit var cardBox: LinearLayout
+    private lateinit var stateText: TextView
+    private lateinit var numberLabel: TextView
     private lateinit var statusTitle: TextView
-    private lateinit var statusLines: TextView
+    private lateinit var tiles: LinearLayout
+    private lateinit var tagButtons: LinearLayout
     private lateinit var feedback: TextView
     private lateinit var input: EditText
     private lateinit var abcBtn: TextView
@@ -178,24 +191,39 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         })
         updateLibraryText()
 
-        // Kortet med tagget
-        statusTitle = label("", 20f, fg).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
-        statusLines = label("", 16f, fg).apply { setLineSpacing(0f, 1.25f) }
+        // Kortet med tagget: status, materialenummer stort, og et felt for hver oplysning
+        stateText = label("", 14f)
+        numberLabel = label("Materialenummer", 13f)
+        statusTitle = label("", 28f, fg).apply {
+            typeface = Typeface.create("monospace", Typeface.BOLD)
+            letterSpacing = 0.04f
+        }
+        tiles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         feedback = label("", 16f, fg).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
-        col.addView(LinearLayout(this).apply {
+        cardBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply { setColor(card); cornerRadius = dp(16).toFloat() }
-            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setPadding(dp(14), dp(12), dp(14), dp(14))
+            addView(stateText)
+            addView(numberLabel, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
             addView(statusTitle)
-            addView(statusLines, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
-            addView(feedback, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+            addView(tiles, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        }
+        col.addView(cardBox, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        col.addView(feedback, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8); marginStart = dp(4); marginEnd = dp(4)
+        })
 
-        col.addView(row(
-            button("Alarm til", orange) { alarm(true) },
-            button("Alarm fra", green) { alarm(false) },
-        ), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
-        col.addView(row(button("Nulstil tag", keyBg, fg) { confirmReset() }))
+        // Knapperne til tagget vises kun, mens det ligger ved telefonen
+        tagButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(row(
+                button("Alarm til", orange) { alarm(true) },
+                button("Alarm fra", green) { alarm(false) },
+            ))
+            addView(row(button("Nulstil tag", keyBg, red) { confirmReset() }))
+        }
+        col.addView(tagButtons, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) })
 
         // Programmér ny chip
         col.addView(label("Programmér chip", 18f, fg).apply {
@@ -297,36 +325,121 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         }
     }
 
+    private enum class Kind { NORMAL, WARN, ALARM_ON, ALARM_OFF }
+    private class Field(val label: String, val value: String, val kind: Kind = Kind.NORMAL)
+
+    private fun tile(f: Field) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        val warn = f.kind == Kind.WARN
+        background = GradientDrawable().apply { setColor(if (warn) warnBg else tileBg); cornerRadius = dp(10).toFloat() }
+        setPadding(dp(12), dp(8), dp(12), dp(10))
+        addView(label(f.label, 13f, if (warn) warnFg else sub))
+        val v = TextView(this@TagToolActivity).apply {
+            text = f.value
+            textSize = 17f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            when (f.kind) {
+                Kind.ALARM_ON, Kind.ALARM_OFF -> {
+                    setTextColor(Color.WHITE)
+                    background = GradientDrawable().apply {
+                        setColor(if (f.kind == Kind.ALARM_ON) orange else green); cornerRadius = dp(20).toFloat()
+                    }
+                    setPadding(dp(12), dp(2), dp(12), dp(3))
+                }
+                Kind.WARN -> setTextColor(warnFg)
+                else -> setTextColor(fg)
+            }
+        }
+        addView(v, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
+    }
+
+    private fun fieldsFor(i: Info): List<Field> {
+        val c = i.content
+        val out = ArrayList<Field>()
+        if (c != null && i.danish && !i.blank) {
+            out += if (c.seqNum in 1..c.numItems) Field("Del", "${c.seqNum} af ${c.numItems}")
+            else Field("Del", "uklart (${c.seqNum}/${c.numItems})", Kind.WARN)
+            val own = Hub.configuredLibrary
+            out += when {
+                c.library.isEmpty() -> Field("Bibliotek", "ikke angivet", Kind.WARN)
+                own != null && c.library != own -> Field("Bibliotek", "${c.country}-${c.library}", Kind.WARN)
+                else -> Field("Bibliotek", "${c.country}-${c.library}")
+            }
+        }
+        if (!i.danish && !i.blank) out += Field("Format", "ikke dansk", Kind.WARN)
+        out += when (i.afi) {
+            AFI_ON -> Field("Alarm", "Til", Kind.ALARM_ON)
+            AFI_OFF -> Field("Alarm", "Fra", Kind.ALARM_OFF)
+            null -> Field("Alarm", "ukendt", Kind.WARN)
+            else -> Field("Alarm", "anden (0x%02X)".format(i.afi), Kind.WARN)
+        }
+        out += Field("Chip", i.maker)
+        return out
+    }
+
     private fun showInfo() {
         runOnUiThread {
+            handler.removeCallbacks(forgetTick)
             val i = info
+            tiles.removeAllViews()
             if (i == null) {
-                statusTitle.text = "Hold et tag mod telefonen"
-                statusLines.text = ""
+                cardBox.alpha = 1f
+                stateText.text = "Hold et tag mod telefonen"
+                numberLabel.visibility = View.GONE
+                statusTitle.visibility = View.GONE
+                tagButtons.visibility = View.GONE
                 return@runOnUiThread
             }
             val c = i.content
+            val hasNumber = c != null && i.danish && !i.blank
+            numberLabel.visibility = if (hasNumber) View.VISIBLE else View.GONE
+            statusTitle.visibility = View.VISIBLE
             statusTitle.text = when {
                 i.blank -> "Tom chip"
-                c != null && i.danish -> c.barcode.ifEmpty { "(intet materialenummer)" }
+                hasNumber -> c!!.barcode.ifEmpty { "(intet nummer)" }
                 else -> "Ukendt indhold"
-            } + if (!present) "  · ikke ved telefonen" else ""
-            val lines = ArrayList<String>()
-            if (c != null && i.danish && !i.blank) {
-                if (c.numItems > 1 || c.seqNum > 1) {
-                    lines += if (c.seqNum in 1..c.numItems) "Del ${c.seqNum} af ${c.numItems}" else "Del: uklart (felter ${c.seqNum}/${c.numItems})"
+            }
+            // Felterne to og to
+            val fields = fieldsFor(i)
+            for (k in fields.indices step 2) {
+                val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                for (f in fields.subList(k, minOf(k + 2, fields.size))) {
+                    r.addView(tile(f), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) })
                 }
-                if (c.library.isNotEmpty()) lines += "Bibliotek: ${c.country}-${c.library}"
+                if (fields.size - k == 1) r.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
+                tiles.addView(r)
             }
-            if (!i.danish && !i.blank) lines += "Ikke den danske datamodel"
-            lines += "Alarm: " + when (i.afi) {
-                AFI_ON -> "til (sikret)"
-                AFI_OFF -> "fra (udlånt)"
-                null -> "ukendt"
-                else -> "anden værdi (0x%02X)".format(i.afi)
+            if (present) {
+                cardBox.alpha = 1f
+                stateText.text = "Chip ved telefonen"
+                tagButtons.visibility = View.VISIBLE
+            } else {
+                cardBox.alpha = 0.55f
+                tagButtons.visibility = View.GONE
+                forgetTick.run()
             }
-            lines += "Chip: ${i.maker}"
-            statusLines.text = lines.joinToString("\n")
+        }
+    }
+
+    /** Chippen er fjernet: vis "Sidst læst" med nedtælling, og glem den efter 10 sekunder */
+    private val forgetTick = object : Runnable {
+        override fun run() {
+            if (present || info == null) return
+            val left = FORGET_AFTER_MS - (SystemClock.elapsedRealtime() - goneAt)
+            if (left <= 0) {
+                val at = goneAt
+                exec.execute {
+                    if (!present && goneAt == at) {
+                        info = null
+                        tag?.close(); tag = null
+                        if (pending == null) say("", fg)
+                    }
+                    showInfo()
+                }
+                return
+            }
+            stateText.text = "Sidst læst · forsvinder om ${(left + 999) / 1000} sek."
+            handler.postDelayed(this, 250)
         }
     }
 
@@ -346,6 +459,7 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         present = true
         pingFails = 0
         info = readInfo(pt)
+        if (pending == null) say("", fg)
         showInfo()
         vibrate(longArrayOf(0, 50))
         maybeProgram()
@@ -357,6 +471,7 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         val blank = raw != null && raw.all { it == 0.toByte() }
         val danish = raw != null && (raw[0].toInt() and 0xFF) == 0x11
         val content = if (danish) try { TagContent.parse(raw!!) } catch (_: Exception) { null } else null
+        content?.let { Hub.noteItemNumber(it.barcode, it.library) }
         content?.library?.takeIf { it.isNotEmpty() }?.let { if (Hub.configuredLibrary == null) suggestLibrary(it) }
         val makerByte = pt.uidMsb.getOrNull(1)?.toInt()?.and(0xFF)
         val maker = when (makerByte) {
@@ -380,6 +495,7 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         } catch (_: Exception) {
             if (++pingFails >= 2) {
                 present = false
+                goneAt = SystemClock.elapsedRealtime()
                 showInfo()
             }
         }
@@ -420,9 +536,16 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         val i = info
         if (i == null || !present) { say("Hold et tag mod telefonen først", orange); return }
         val name = i.content?.barcode?.takeIf { it.isNotEmpty() } ?: "dette tag"
-        AlertDialog.Builder(this)
-            .setTitle("Nulstil tag?")
-            .setMessage("$name bliver helt tomt som en ny chip. Det kan ikke fortrydes.")
+        val msg = SpannableStringBuilder().apply {
+            val b0 = length; append(name); setSpan(StyleSpan(Typeface.BOLD), b0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            append(" bliver helt tomt som en ny chip.\n\n")
+            val r0 = length; append("Det kan ikke fortrydes.")
+            setSpan(StyleSpan(Typeface.BOLD), r0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(ForegroundColorSpan(red), r0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val d = AlertDialog.Builder(this)
+            .setTitle("⚠  Nulstil tag?")
+            .setMessage(msg)
             .setPositiveButton("Nulstil") { _, _ ->
                 withTag("Nulstil") { t, _ ->
                     t.writeBlocks(ByteArray(32))
@@ -434,6 +557,7 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
             }
             .setNegativeButton("Annuller", null)
             .show()
+        d.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(red)
     }
 
     // ---------- Programmering ----------

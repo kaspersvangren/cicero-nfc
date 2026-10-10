@@ -60,6 +60,41 @@ object Hub {
     @Volatile var lastLibrary: String? = null
         private set
 
+    /**
+     * Husker længden på materialenumre fra eget bibliotek, så kameraet i værktøjet kan sætte
+     * numre med den rigtige længde øverst. Kun længden gemmes – aldrig selve numrene.
+     */
+    fun noteItemNumber(barcode: String, library: String?) {
+        if (!::ctx.isInitialized) return
+        if (barcode.length !in 4..16 || !barcode.all { it.isDigit() }) return
+        val own = configuredLibrary
+        if (own != null && !library.isNullOrEmpty() && library != own) return
+        try {
+            val p = ctx.getSharedPreferences("ui", Context.MODE_PRIVATE)
+            val m = parseLens(p.getString("itemLens", null))
+            m[barcode.length] = (m[barcode.length] ?: 0) + 1
+            if (m.values.sum() > 1000) m.keys.toList().forEach { k -> m[k] = (m[k] ?: 0) / 2 }
+            p.edit().putString("itemLens", m.filterValues { it > 0 }.entries.joinToString(",") { "${it.key}:${it.value}" }).apply()
+        } catch (_: Exception) {}
+    }
+
+    /** Den mest almindelige længde på jeres materialenumre, eller null hvis app'en ikke har set nogen endnu */
+    fun itemLength(): Int? {
+        if (!::ctx.isInitialized) return null
+        val m = parseLens(ctx.getSharedPreferences("ui", Context.MODE_PRIVATE).getString("itemLens", null))
+        return m.maxByOrNull { it.value }?.key
+    }
+
+    private fun parseLens(s: String?): MutableMap<Int, Int> {
+        val m = HashMap<Int, Int>()
+        s?.split(',')?.forEach { e ->
+            val kv = e.split(':')
+            val k = kv.getOrNull(0)?.toIntOrNull(); val v = kv.getOrNull(1)?.toIntOrNull()
+            if (k != null && v != null) m[k] = v
+        }
+        return m
+    }
+
     /** Låst = Cicero er dækket og bøger læses ikke. Låst fra start, så login ikke kan bruges af andre. */
     @Volatile var locked = true
     @Volatile var lastActivity = 0L
@@ -180,7 +215,10 @@ object Hub {
         }
         try {
             state.content = TagContent.parse(phone.readBlocks(0, 8))
-            state.content?.library?.takeIf { it.isNotEmpty() }?.let { lastLibrary = it }
+            state.content?.library?.takeIf { it.isNotEmpty() }?.let { lib ->
+                lastLibrary = lib
+                state.content?.barcode?.let { noteItemNumber(it, lib) }
+            }
             count("ReadTagSucc")
         } catch (e: Exception) {
             count("ReadTagFail")
