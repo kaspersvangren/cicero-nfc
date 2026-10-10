@@ -617,6 +617,17 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         }
     }
 
+    /** Giver app'ens tilpasninger (fx den svævende knaprække) Ciceros kortfarve i lys/mørk */
+    private fun pushPageColors() {
+        if (!::web.isInitialized) return
+        fun hex(c: Int) = "#%06X".format(c and 0xFFFFFF)
+        web.evaluateJavascript(
+            "(function(){var s=document.documentElement.style;" +
+                "s.setProperty('--cnfc-card','${hex(pal.logBg)}');s.setProperty('--cnfc-line','${hex(pal.line)}');})()",
+            null,
+        )
+    }
+
     private fun applyPalette() {
         root.setBackgroundColor(pal.logBg)
         progress.progressTintList = ColorStateList.valueOf(pal.blue)
@@ -629,6 +640,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         lockHint.setTextColor(pal.sub)
         logScroll.setBackgroundColor(pal.logBg)
         divider.setBackgroundColor(pal.line)
+        pushPageColors()
         refreshStatus()
     }
 
@@ -998,6 +1010,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     web.evaluateJavascript(SWIPE_TABS_JS, null)
                     web.evaluateJavascript(PIN_TOGGLE_JS, null)
                     web.evaluateJavascript(STICKY_BUTTONS_JS, null)
+                    pushPageColors()
                 }
                 handler.postDelayed({ detectCiceroTheme() }, 500)
             }
@@ -1459,37 +1472,21 @@ private val STICKY_BUTTONS_JS = """
 (function () {
   if (window.__cnfcSticky) return;
   window.__cnfcSticky = true;
-  var logged = {};
+  var logged = {}, bars = [];
   function log(m) { if (logged[m]) return; logged[m] = 1; try { CiceroNFC.tweak(m); } catch (e) {} }
   function txt(el) { return ((el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim(); }
   function vis(el) { return !!el && el.offsetParent !== null; }
-  function solid(c) { return c && c !== 'transparent' && !/rgba\([^)]*,\s*0\)${'$'}/.test(c); }
-  function bgOf(el) {
-    for (var e = el; e && e.nodeType === 1; e = e.parentElement) {
-      var c = getComputedStyle(e).backgroundColor;
-      if (solid(c)) return c;
-    }
-    var b = getComputedStyle(document.body).backgroundColor;
-    return solid(b) ? b : '#fff';
-  }
   // Højden på Ciceros bundmenu (fast i bunden af skærmen), 0 hvis der ingen er
   function navHeight() {
     var el = document.elementFromPoint(innerWidth / 2, innerHeight - 4);
     for (var e = el; e && e !== document.body; e = e.parentElement) {
-      if (e.hasAttribute && e.hasAttribute('data-cnfc-sticky')) return 0;
+      if (e.hasAttribute && e.hasAttribute('data-cnfc-bar')) return 0;
       if (getComputedStyle(e).position === 'fixed') {
         var r = e.getBoundingClientRect();
         if (r.bottom >= innerHeight - 2 && r.height < innerHeight / 3) return Math.round(innerHeight - r.top);
       }
     }
     return 0;
-  }
-  function scroller(el) {
-    for (var e = el.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
-      var o = getComputedStyle(e).overflowY;
-      if ((o === 'auto' || o === 'scroll') && e.scrollHeight > e.clientHeight + 1) return e;
-    }
-    return null;
   }
   function names(el) {
     var out = [], bs = el.querySelectorAll('button');
@@ -1536,65 +1533,67 @@ private val STICKY_BUTTONS_JS = """
       }
     });
   }
-  function makeSticky(f) {
-    var nav = navHeight();
-    var sc = scroller(f);
-    var bottom = sc ? Math.max(0, Math.round(sc.getBoundingClientRect().bottom - (innerHeight - nav))) : nav;
-    f.__cnfcNav = nav;
-    f.setAttribute('data-cnfc-sticky', 'sticky');
-    f.style.position = 'sticky';
-    f.style.bottom = bottom + 'px';
-    f.style.zIndex = '5';
-    f.style.boxShadow = '0 -1px 0 rgba(128,128,128,0.35)';
-  }
-  function makeFixed(f) {
-    var sp = document.createElement('div');
-    sp.style.height = f.offsetHeight + 'px';
-    f.parentElement.insertBefore(sp, f);
-    f.__cnfcSpacer = sp;
-    f.setAttribute('data-cnfc-sticky', 'fixed');
-    f.style.position = 'fixed';
-    f.style.bottom = (f.__cnfcNav || 0) + 'px';
-    log('Knaprækken følger ikke med af sig selv – lagt fast i bunden af skærmen');
-  }
-  function check(f) {
-    var mode = f.getAttribute('data-cnfc-sticky');
-    if (mode === 'sticky') {
-      var limit = innerHeight - (f.__cnfcNav || 0);
-      var r = f.getBoundingClientRect(), p = f.parentElement.getBoundingClientRect();
-      // Kortet når ind på skærmen, men bunden af det står stadig under kanten: klæbende virker ikke her
-      if (p.top < limit - 60 && r.top > limit + 1) makeFixed(f);
-    } else if (mode === 'fixed') {
-      var sp = f.__cnfcSpacer;
-      if (!sp || !sp.isConnected) return;
+  // Står knaprækken på sin plads og kan ses, bliver den der. Ellers svæver den nederst på skærmen
+  // (over Ciceros bundmenu) – også når man ruller ned i et langt søgeresultat.
+  function place(bar) {
+    var f = bar.f, sp = bar.spacer;
+    if (!f.isConnected) return false;
+    if (!sp.isConnected || !vis(sp.parentElement)) { f.style.visibility = 'hidden'; return true; }
+    f.style.visibility = '';
+    var nav = navHeight(), limit = innerHeight - nav;
+    var home = (bar.floating ? sp : f).getBoundingClientRect();
+    var fits = home.top >= 0 && home.bottom <= limit;
+    if (fits && bar.floating) {
+      bar.floating = false;
+      sp.style.display = 'none';
+      f.style.position = ''; f.style.left = ''; f.style.width = ''; f.style.bottom = ''; f.style.boxShadow = '';
+    } else if (!fits) {
+      if (!bar.floating) {
+        bar.floating = true;
+        sp.style.height = f.offsetHeight + 'px';
+        sp.style.display = '';
+        f.style.position = 'fixed';
+        f.style.zIndex = '5';
+        f.style.boxShadow = '0 -1px 0 var(--cnfc-line, rgba(128,128,128,0.35))';
+      }
       var pr = sp.parentElement.getBoundingClientRect();
-      f.style.left = Math.round(pr.left) + 'px';
-      f.style.width = Math.round(pr.width) + 'px';
-      f.style.visibility = vis(sp) ? '' : 'hidden';
+      f.style.left = Math.round(Math.max(0, pr.left)) + 'px';
+      f.style.width = Math.round(Math.min(innerWidth, pr.right) - Math.max(0, pr.left)) + 'px';
+      f.style.bottom = nav + 'px';
     }
+    f.style.background = 'var(--cnfc-card, transparent)';
+    return true;
   }
+  function placeAll() { bars = bars.filter(place); }
   function scan() {
     var bs = document.querySelectorAll('button');
     for (var i = 0; i < bs.length; i++) {
       var b = bs[i];
-      if (!/^nulstil${'$'}/i.test(txt(b))) continue;
-      if (b.closest('.cdk-overlay-container')) continue;
-      var f = b.closest('[data-cnfc-sticky]');
-      if (!f) {
-        if (!vis(b)) continue;
-        var row = rowOf(b);
-        if (!row) { log('Nulstil fundet, men ingen Søg-knap ved siden af'); continue; }
-        f = footerOf(row);
-        makeSticky(f);
-        compact(f, row);
-        log('Knaprække fundet (' + names(f) + ')');
-      }
-      f.style.background = bgOf(f);
-      check(f);
+      if (!/^nulstil${'$'}/i.test(txt(b)) || !vis(b)) continue;
+      if (b.closest('.cdk-overlay-container') || b.closest('[data-cnfc-bar]')) continue;
+      var row = rowOf(b);
+      if (!row) { log('Nulstil fundet, men ingen Søg-knap ved siden af'); continue; }
+      var f = footerOf(row);
+      f.setAttribute('data-cnfc-bar', '1');
+      compact(f, row);
+      var sp = document.createElement('div');
+      sp.style.display = 'none';
+      f.parentElement.insertBefore(sp, f);
+      bars.push({ f: f, spacer: sp, floating: false });
+      log('Knaprække fundet (' + names(f) + ')');
     }
+    placeAll();
   }
+  var queued = false;
+  function onScroll() {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(function () { queued = false; placeAll(); });
+  }
+  document.addEventListener('scroll', onScroll, true);
+  addEventListener('resize', onScroll);
   scan();
-  setInterval(scan, 1000);
+  setInterval(scan, 700);
 })();
 """
 
