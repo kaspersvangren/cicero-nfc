@@ -1493,22 +1493,10 @@ private val STICKY_BUTTONS_JS = """
 (function () {
   if (window.__cnfcSticky) return;
   window.__cnfcSticky = true;
-  var logged = {}, bars = [];
+  var logged = {}, bar = null;
   function log(m) { if (logged[m]) return; logged[m] = 1; try { CiceroNFC.tweak(m); } catch (e) {} }
   function txt(el) { return ((el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim(); }
   function vis(el) { return !!el && el.offsetParent !== null; }
-  // Højden på Ciceros bundmenu (fast i bunden af skærmen), 0 hvis der ingen er
-  function navHeight() {
-    var el = document.elementFromPoint(innerWidth / 2, innerHeight - 4);
-    for (var e = el; e && e !== document.body; e = e.parentElement) {
-      if (e.hasAttribute && e.hasAttribute('data-cnfc-bar')) return 0;
-      if (getComputedStyle(e).position === 'fixed') {
-        var r = e.getBoundingClientRect();
-        if (r.bottom >= innerHeight - 2 && r.height < innerHeight / 3) return Math.round(innerHeight - r.top);
-      }
-    }
-    return 0;
-  }
   function names(el) {
     var out = [], bs = el.querySelectorAll('button');
     for (var i = 0; i < bs.length && out.length < 5; i++) { var t = txt(bs[i]); if (t && t.length <= 20) out.push(t); }
@@ -1531,96 +1519,70 @@ private val STICKY_BUTTONS_JS = """
       if (p.getBoundingClientRect().height > el.getBoundingClientRect().height + 80) break;
       el = p;
     }
-    return el;
+    // Indeholder bunden andre knapper (fx plus), skjules kun selve rækken
+    return el.querySelectorAll('button').length === row.querySelectorAll('button').length ? el : row;
   }
-  // Gør bunden lav: ingen ekstra luft, og tomme pyntebokse (fx streger) skjules
-  function compact(f, row) {
-    var chain = [];
-    for (var e = row; e; e = e.parentElement) { chain.push(e); if (e === f) break; }
-    chain.forEach(function (e) {
-      e.style.marginTop = '0'; e.style.marginBottom = '0'; e.style.minHeight = '0';
-      if (e !== f) { e.style.paddingTop = '0'; e.style.paddingBottom = '0'; }
-      if (e !== row) e.style.height = 'auto';
-    });
-    f.style.paddingTop = '4px';
-    f.style.paddingBottom = '4px';
-    chain.forEach(function (e) {
-      if (e === row) return;
-      for (var i = 0; i < e.children.length; i++) {
-        var c = e.children[i];
-        if (chain.indexOf(c) >= 0) continue;
-        if (c.matches('button, a, input, [role=button]') || c.querySelector('button, a, input, [role=button]') || txt(c)) continue;
-        c.style.display = 'none';
+  // Ciceros faner flyttes med en animation; "fast på skærmen" virker kun uden for dem.
+  // Pillen lægges derfor lige uden for den yderste flyttede boks (så Ciceros farver stadig gælder).
+  function moved(e) {
+    var s = getComputedStyle(e);
+    return s.transform !== 'none' || s.filter !== 'none' || s.perspective !== 'none' ||
+      /transform|filter/.test(s.willChange || '') || /paint|layout|strict|content/.test(s.contain || '');
+  }
+  function hostFor(el) {
+    var host = null;
+    for (var e = el.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      if (moved(e)) host = e.parentElement;
+    }
+    return host || el.parentElement;
+  }
+  // Toppen af Ciceros bundmenu
+  function navTop(pill) {
+    var list = document.elementsFromPoint(innerWidth / 2, innerHeight - 3), best = null;
+    for (var i = 0; i < list.length; i++) {
+      if (pill.contains(list[i])) continue;
+      for (var e = list[i]; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+        var r = e.getBoundingClientRect();
+        if (r.bottom >= innerHeight - 2 && r.width >= innerWidth * 0.9 && r.height < innerHeight / 4) best = r;
       }
+      break;
+    }
+    return best ? best.top : innerHeight;
+  }
+  function makePill() {
+    var p = document.createElement('div');
+    p.setAttribute('data-cnfc-bar', '1');
+    p.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);z-index:900;display:flex;' +
+      'align-items:center;gap:8px;padding:6px 14px;border-radius:999px;' +
+      'background:var(--cnfc-card,#fff);box-shadow:0 2px 10px rgba(0,0,0,0.35);';
+    return p;
+  }
+  function sig(row) {
+    return [].map.call(row.querySelectorAll('button'), function (b) {
+      return txt(b) + '|' + b.disabled + '|' + b.className;
+    }).join(';');
+  }
+  // Kopien af knapperne: et tryk på kopien trykker på Ciceros rigtige knap
+  function refresh(st) {
+    var s = sig(st.row);
+    if (s === st.sig) return;
+    st.sig = s;
+    var c = st.row.cloneNode(true);
+    c.removeAttribute('id');
+    [].forEach.call(c.querySelectorAll('[id]'), function (x) { x.removeAttribute('id'); });
+    c.style.cssText = 'display:flex;align-items:center;gap:8px;margin:0;padding:0;width:auto;height:auto;';
+    var ob = st.row.querySelectorAll('button'), cb = c.querySelectorAll('button');
+    [].forEach.call(cb, function (x, i) {
+      x.addEventListener('click', function (e) {
+        e.preventDefault(); e.stopPropagation();
+        var o = ob[i];
+        if (o && !o.disabled) o.click();
+      }, true);
     });
+    st.pill.innerHTML = '';
+    st.pill.appendChild(c);
   }
-  function scroller(el) {
-    for (var e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
-      var o = getComputedStyle(e).overflowY;
-      if ((o === 'auto' || o === 'scroll') && e.scrollHeight > e.clientHeight + 1) return e;
-    }
-    return null;
-  }
-  // Det synlige område: kanterne af det, Cicero ruller i (mellem fanerne og bundmenuen)
-  function area(from) {
-    var sc = scroller(from);
-    var top = 0, bottom = innerHeight - navHeight();
-    if (sc) {
-      var r = sc.getBoundingClientRect();
-      top = Math.max(0, Math.round(r.top));
-      bottom = Math.min(bottom, Math.round(r.bottom));
-    }
-    // Ciceros fanerække kan ligge øverst inde i det rullende område – så sættes rækken lige under den
-    var tabs = document.querySelectorAll('[role=tablist]');
-    for (var i = 0; i < tabs.length; i++) {
-      if (!vis(tabs[i]) || tabs[i].contains(from)) continue;
-      var t = tabs[i].getBoundingClientRect();
-      if (t.top <= top + 4 && t.bottom > top && t.bottom < innerHeight / 3) top = Math.round(t.bottom);
-    }
-    return { top: top, bottom: bottom };
-  }
-  function setMode(bar, mode) {
-    var f = bar.f, sp = bar.spacer;
-    if (bar.mode === mode) return;
-    if (mode === 'home') {
-      sp.style.display = 'none';
-      f.style.position = ''; f.style.left = ''; f.style.width = ''; f.style.top = ''; f.style.bottom = '';
-      f.style.boxShadow = ''; f.style.zIndex = '';
-    } else {
-      if (bar.mode === 'home') { sp.style.height = f.offsetHeight + 'px'; sp.style.display = ''; }
-      f.style.position = 'fixed';
-      f.style.zIndex = '900'; // over Ciceros egne faste elementer, under dialoger
-      f.style.boxSizing = 'border-box';
-      var line = 'var(--cnfc-line, rgba(128,128,128,0.35))';
-      f.style.boxShadow = mode === 'top' ? '0 1px 0 ' + line : '0 -1px 0 ' + line;
-    }
-    bar.mode = mode;
-  }
-  // Står knaprækken på sin plads og kan ses, bliver den der. Er pladsen rullet op over skærmen, sætter
-  // den sig øverst (under fanerne); er pladsen længere nede, sætter den sig nederst (over bundmenuen).
-  // Den glider derfor uden hop og er altid på skærmen – også i et langt søgeresultat.
-  function place(bar) {
-    var f = bar.f, sp = bar.spacer;
-    if (!f.isConnected) return false;
-    if (!sp.isConnected || !vis(sp.parentElement)) { f.style.visibility = 'hidden'; return true; }
-    f.style.visibility = '';
-    var a = area(sp.parentElement);
-    var home = (bar.mode === 'home' ? f : sp).getBoundingClientRect();
-    // Kortets bredde og placering huskes, mens rækken står på sin plads
-    if (bar.mode === 'home') { bar.left = home.left; bar.width = home.width; }
-    var mode = home.top < a.top ? 'top' : (home.bottom > a.bottom ? 'bottom' : 'home');
-    setMode(bar, mode);
-    if (mode !== 'home') {
-      f.style.left = Math.round(bar.left) + 'px';
-      f.style.width = Math.round(bar.width) + 'px';
-      if (mode === 'top') { f.style.top = a.top + 'px'; f.style.bottom = ''; }
-      else { f.style.bottom = (innerHeight - a.bottom) + 'px'; f.style.top = ''; }
-    }
-    f.style.background = 'var(--cnfc-card, transparent)';
-    return true;
-  }
-  function placeAll() { bars = bars.filter(place); }
-  function scan() {
+  function find() {
     var bs = document.querySelectorAll('button');
     for (var i = 0; i < bs.length; i++) {
       var b = bs[i];
@@ -1628,28 +1590,35 @@ private val STICKY_BUTTONS_JS = """
       if (b.closest('.cdk-overlay-container') || b.closest('[data-cnfc-bar]')) continue;
       var row = rowOf(b);
       if (!row) { log('Nulstil fundet, men ingen Søg-knap ved siden af'); continue; }
-      var f = footerOf(row);
-      f.setAttribute('data-cnfc-bar', '1');
-      compact(f, row);
-      var sp = document.createElement('div');
-      sp.style.display = 'none';
-      f.parentElement.insertBefore(sp, f);
-      var r0 = f.getBoundingClientRect();
-      bars.push({ f: f, spacer: sp, mode: 'home', left: r0.left, width: r0.width });
-      log('Knaprække fundet (' + names(f) + ')');
+      return row;
     }
-    placeAll();
+    return null;
   }
-  var queued = false;
-  function onScroll() {
-    if (queued) return;
-    queued = true;
-    requestAnimationFrame(function () { queued = false; placeAll(); });
+  function sync() {
+    if (bar && (!bar.row.isConnected || !bar.target.isConnected)) {
+      bar.pill.remove();
+      bar = null;
+    }
+    if (!bar) {
+      var row = find();
+      if (!row) return;
+      var target = footerOf(row);
+      var pill = makePill();
+      hostFor(target).appendChild(pill);
+      target.style.display = 'none';
+      bar = { row: row, target: target, pill: pill, sig: null };
+      log('Knaprække fundet (' + names(row) + ')');
+    }
+    // Skjult sammen med søgekortet (fx en anden fane)
+    var show = vis(bar.target.parentElement);
+    bar.pill.style.display = show ? 'flex' : 'none';
+    if (!show) return;
+    refresh(bar);
+    bar.pill.style.bottom = Math.round(innerHeight - navTop(bar.pill) + 8) + 'px';
   }
-  document.addEventListener('scroll', onScroll, true);
-  addEventListener('resize', onScroll);
-  scan();
-  setInterval(scan, 700);
+  sync();
+  setInterval(sync, 400);
+  addEventListener('resize', sync);
 })();
 """
 
