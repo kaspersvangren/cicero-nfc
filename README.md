@@ -38,6 +38,17 @@ Hold bogen mod bagsiden af telefonen:
 | Grå pille, flueben | læst på en side uden alarmskift | – |
 | Rød pille "RFID-fejl" | Hostname og/eller Port i Ciceros RFID-opsætning er forkert (fx et mellemrum); tryk for vejledning | – |
 
+## Værktøj til tags (menuen ⋮)
+
+Mens værktøjet er åbent, får Cicero ikke besked om tags.
+
+- Viser hvad der står på et tag: materialenummer, del x af y, alarm, bibliotek og chiptype.
+- **Alarm til/fra** i hånden og **Nulstil tag** (helt tom som en ny chip; spørger først).
+- **Programmér chip**: materialenummer tastes eller læses med kameraet (stregkode eller trykte tal).
+  Sæt programmeres del for del, én chip ad gangen. Efter programmering er alarmen slået til.
+- **Biblioteksnummer** indstilles i værktøjet og skrives på nye chips sammen med DK.
+- App'en sender aldrig lås-kommandoer til et tag (de kan ikke fortrydes).
+
 ## Data og sikkerhed
 
 - App'en gemmer kun det samme som en almindelig browser (login, mellemlager) samt om
@@ -55,6 +66,8 @@ Hold bogen mod bagsiden af telefonen:
 - Den lokale server svarer kun forespørgsler fra Cicero Mobile
   (`https://cicero.systematic.com`) rettet til localhost.
 - Kameraet (scanning af lånerkort) gives kun til Ciceros egen side.
+- Værktøjets kamera genkender tal og stregkoder på selve telefonen (Googles ML Kit via Play-tjenester).
+  Billeder gemmes ikke og sendes ikke; Play-tjenester kan sende anonym brugsstatistik om genkendelsen til Google.
 - Links, der åbner et nyt vindue, åbnes i telefonens browser.
 
 ## Protokol

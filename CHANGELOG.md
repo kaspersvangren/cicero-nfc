@@ -1,5 +1,6 @@
 # Ændringer
 
+- **Næste version** – Værktøj til tags (menuen ⋮): se indhold, alarm til/fra, nulstil, og programmér chips – materialenummer tastes eller læses med kameraet (stregkode eller tal); sæt del for del. Biblioteksnummer kan indstilles. Fokus-ringen på pinkode-kontakten er væk.
 - **0.1.36** – Pinkode-kontakten står på linje med "Send kvittering", vises kun under Udlån, og Enhedsindstillinger skjules, mens den skifter.
 - **0.1.35** – Kontakten "Pinkode" ved "Send kvittering" i udlånsbilledet slår Ciceros krav om pinkode ved udlån til og fra med ét tryk. Undersøgelsen i loggen er fjernet igen.
 - **0.1.34** – Undersøgelsen af pinkode-indstillingen fanger nu også navne med "code".

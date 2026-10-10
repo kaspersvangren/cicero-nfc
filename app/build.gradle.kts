@@ -48,3 +48,14 @@ android {
         abortOnError = false
     }
 }
+
+dependencies {
+    // Værktøj til tags: kamera (CameraX) og genkendelse af tal og stregkoder (Googles ML Kit via Play-tjenester,
+    // kører på telefonen uden net – modellerne hentes af Play-tjenester, så app'en ikke bliver stor)
+    implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
+    implementation("androidx.camera:camera-view:1.4.1")
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.1")
+    implementation("com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1")
+}

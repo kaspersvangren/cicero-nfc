@@ -20,7 +20,9 @@ import java.util.concurrent.TimeUnit
  */
 object Hub {
     const val DEFAULT_COUNTRY = "DK"
-    const val DEFAULT_LIBRARY = "715900"
+
+    /** Biblioteksnummer sat i Værktøj til tags (null = ikke sat) */
+    @Volatile var configuredLibrary: String? = null
 
     class TagState(
         val phone: PhoneTag,
@@ -54,7 +56,9 @@ object Hub {
     private val inventory = LinkedHashMap<String, TagState>()
     private var current: TagState? = null
     private var pingFails = 0
-    private var lastLibrary = DEFAULT_LIBRARY
+    /** Det biblioteksnummer, der senest er set på et tag – foreslås, hvis intet er sat */
+    @Volatile var lastLibrary: String? = null
+        private set
 
     /** Låst = Cicero er dækket og bøger læses ikke. Låst fra start, så login ikke kan bruges af andre. */
     @Volatile var locked = true
@@ -345,7 +349,9 @@ object Hub {
     }
 
     private fun writeContent(s: TagState, barcode: String, numItems: Int, seqNum: Int) {
-        val library = s.content?.library?.takeIf { it.isNotEmpty() } ?: lastLibrary
+        // Et tag, der allerede tilhører et bibliotek, beholder det; nye chips får det indstillede nummer
+        val library = s.content?.library?.takeIf { it.isNotEmpty() } ?: configuredLibrary ?: lastLibrary
+            ?: throw IllegalStateException("biblioteksnummer er ikke sat (Værktøj til tags)")
         val country = s.content?.country?.takeIf { it.isNotEmpty() } ?: DEFAULT_COUNTRY
         val bytes = TagContent.build(barcode, numItems, seqNum, country, library)
         try {

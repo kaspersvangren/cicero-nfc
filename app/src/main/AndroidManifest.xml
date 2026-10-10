@@ -38,5 +38,22 @@
         <receiver
             android:name=".UpdateReceiver"
             android:exported="false" />
+
+        <activity
+            android:name=".TagToolActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".ScanActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
+        <!-- Play-tjenester henter tekst- og stregkodegenkendelsen allerede ved installation -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr,barcode" />
     </application>
 </manifest>

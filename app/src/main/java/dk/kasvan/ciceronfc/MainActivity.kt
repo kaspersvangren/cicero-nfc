@@ -149,6 +149,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Hub.start(applicationContext)
+        Hub.configuredLibrary = getSharedPreferences("ui", MODE_PRIVATE).getString("library", null)
         nfc = NfcAdapter.getDefaultAdapter(this)
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val saved = prefs().getString("ciceroTheme", null)
@@ -684,6 +685,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             isCheckable = true
             isChecked = prefs().getBoolean(PREF_PIN_FLIP, false)
         }
+        m.menu.add(0, 11, 6, "Værktøj til tags")
         m.menu.add(0, 7, 6, "Søg efter opdatering")
         m.menu.add(0, 8, 7, "Ændringer")
         m.menu.add(0, 4, 8, "Om Cicero NFC")
@@ -703,6 +705,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     injectPinWatcher()
                 }
                 10 -> toggleFlip()
+                11 -> startActivity(Intent(this, TagToolActivity::class.java).putExtra(TagToolActivity.EXTRA_DARK, pal === darkPalette))
             }
             true
         }
@@ -731,6 +734,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     "Kotlin Standard Library\n" +
                     "Copyright JetBrains s.r.o. and Kotlin Programming Language contributors\n" +
                     "Apache License 2.0\n\n" +
+                    "AndroidX (Activity, CameraX)\n" +
+                    "Copyright The Android Open Source Project\n" +
+                    "Apache License 2.0\n\n" +
+                    "Google ML Kit (tekst- og stregkodegenkendelse via Google Play-tjenester)\n" +
+                    "ML Kit Terms of Service: https://developers.google.com/ml-kit/terms\n\n" +
                     "Licensed under the Apache License, Version 2.0. You may obtain a copy of the License at " +
                     "https://www.apache.org/licenses/LICENSE-2.0\n\n" +
                     "Unless required by applicable law or agreed to in writing, software distributed under the " +
@@ -1594,6 +1602,9 @@ private val PIN_TOGGLE_JS = """
       mine.setAttribute('data-cnfc', 'pin');
       mine.removeAttribute('id');
       Array.prototype.forEach.call(mine.querySelectorAll('[id], [for]'), function (e) { e.removeAttribute('id'); e.removeAttribute('for'); });
+      // Ingen fokus-ring/ripple kopieret med fra Ciceros kontakt
+      Array.prototype.forEach.call(mine.querySelectorAll('.mat-mdc-focus-indicator, .mdc-switch__ripple, .mat-ripple, .mat-mdc-slide-toggle-ripple'), function (e) { e.remove(); });
+      ['cdk-focused', 'cdk-keyboard-focused', 'cdk-program-focused', 'cdk-mouse-focused', 'mat-mdc-slide-toggle-focused'].forEach(function (c) { mine.classList.remove(c); });
       var w = document.createTreeWalker(mine, NodeFilter.SHOW_TEXT, null);
       var n;
       while ((n = w.nextNode())) if (n.nodeValue.indexOf('Send kvittering') >= 0) n.nodeValue = n.nodeValue.replace('Send kvittering', 'Pinkode');
