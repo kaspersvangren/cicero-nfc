@@ -1,5 +1,6 @@
 # Ændringer
 
+- **Næste version** – Den svævende knaprække står rigtigt: lige under fanerne eller lige over bundmenuen, i søgekortets bredde og over Ciceros egne elementer.
 - **0.1.44** – Ny side ⋮ → Indstillinger samler lyd, pinkode-tastatur, vend og tilpasninger; lyden ved alarmskift kan slås fra (vibrationen bliver). Knaprækken Nulstil/Søg glider uden hop: øverst under fanerne, når man er rullet forbi den, ellers nederst – så den ikke dækker "til toppen"-knappen.
 - **0.1.43** – Knaprækken Nulstil/Søg svæver nu altid nederst på skærmen, også når man ruller ned i søgeresultatet, og den følger lys/mørk tilstand.
 - **0.1.42** – Sikkerhedsrettelser efter uafhængig gennemgang: Værktøj til tags og kameraet låser også efter 5 minutter, og værktøjet kræver altid oplåsning. Andre hjemmesider åbnes i browseren; pinkode og kamera kun til Cicero. Værktøjets vibration kommer igennem i lydløs. Oprydning i koden.

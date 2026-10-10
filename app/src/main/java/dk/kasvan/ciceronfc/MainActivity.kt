@@ -1561,35 +1561,36 @@ private val STICKY_BUTTONS_JS = """
     }
     return null;
   }
-  // Øverste synlige linje under Ciceros top (fx fanerækken, der bliver stående, når man ruller)
-  function topLimit(from) {
+  // Det synlige område: kanterne af det, Cicero ruller i (mellem fanerne og bundmenuen)
+  function area(from) {
     var sc = scroller(from);
-    var top = sc ? Math.max(0, sc.getBoundingClientRect().top) : 0;
-    for (var k = 0; k < 3; k++) {
-      var el = document.elementFromPoint(innerWidth / 2, top + 2), moved = false;
-      for (var e = el; e && e !== document.body; e = e.parentElement) {
-        if (e.hasAttribute && e.hasAttribute('data-cnfc-bar')) break;
-        var p = getComputedStyle(e).position;
-        if (p === 'fixed' || p === 'sticky') {
-          var r = e.getBoundingClientRect();
-          if (r.top <= top + 2 && r.bottom > top + 2 && r.height < innerHeight / 3) { top = Math.round(r.bottom); moved = true; }
-          break;
-        }
-      }
-      if (!moved) break;
+    var top = 0, bottom = innerHeight - navHeight();
+    if (sc) {
+      var r = sc.getBoundingClientRect();
+      top = Math.max(0, Math.round(r.top));
+      bottom = Math.min(bottom, Math.round(r.bottom));
     }
-    return top;
+    // Ciceros fanerække kan ligge øverst inde i det rullende område – så sættes rækken lige under den
+    var tabs = document.querySelectorAll('[role=tablist]');
+    for (var i = 0; i < tabs.length; i++) {
+      if (!vis(tabs[i]) || tabs[i].contains(from)) continue;
+      var t = tabs[i].getBoundingClientRect();
+      if (t.top <= top + 4 && t.bottom > top && t.bottom < innerHeight / 3) top = Math.round(t.bottom);
+    }
+    return { top: top, bottom: bottom };
   }
   function setMode(bar, mode) {
     var f = bar.f, sp = bar.spacer;
     if (bar.mode === mode) return;
     if (mode === 'home') {
       sp.style.display = 'none';
-      f.style.position = ''; f.style.left = ''; f.style.width = ''; f.style.top = ''; f.style.bottom = ''; f.style.boxShadow = '';
+      f.style.position = ''; f.style.left = ''; f.style.width = ''; f.style.top = ''; f.style.bottom = '';
+      f.style.boxShadow = ''; f.style.zIndex = '';
     } else {
       if (bar.mode === 'home') { sp.style.height = f.offsetHeight + 'px'; sp.style.display = ''; }
       f.style.position = 'fixed';
-      f.style.zIndex = '5';
+      f.style.zIndex = '900'; // over Ciceros egne faste elementer, under dialoger
+      f.style.boxSizing = 'border-box';
       var line = 'var(--cnfc-line, rgba(128,128,128,0.35))';
       f.style.boxShadow = mode === 'top' ? '0 1px 0 ' + line : '0 -1px 0 ' + line;
     }
@@ -1603,16 +1604,17 @@ private val STICKY_BUTTONS_JS = """
     if (!f.isConnected) return false;
     if (!sp.isConnected || !vis(sp.parentElement)) { f.style.visibility = 'hidden'; return true; }
     f.style.visibility = '';
-    var bottom = innerHeight - navHeight(), top = topLimit(sp.parentElement);
+    var a = area(sp.parentElement);
     var home = (bar.mode === 'home' ? f : sp).getBoundingClientRect();
-    var mode = home.top < top ? 'top' : (home.bottom > bottom ? 'bottom' : 'home');
+    // Kortets bredde og placering huskes, mens rækken står på sin plads
+    if (bar.mode === 'home') { bar.left = home.left; bar.width = home.width; }
+    var mode = home.top < a.top ? 'top' : (home.bottom > a.bottom ? 'bottom' : 'home');
     setMode(bar, mode);
     if (mode !== 'home') {
-      var pr = sp.parentElement.getBoundingClientRect();
-      f.style.left = Math.round(Math.max(0, pr.left)) + 'px';
-      f.style.width = Math.round(Math.min(innerWidth, pr.right) - Math.max(0, pr.left)) + 'px';
-      if (mode === 'top') { f.style.top = top + 'px'; f.style.bottom = ''; }
-      else { f.style.bottom = (innerHeight - bottom) + 'px'; f.style.top = ''; }
+      f.style.left = Math.round(bar.left) + 'px';
+      f.style.width = Math.round(bar.width) + 'px';
+      if (mode === 'top') { f.style.top = a.top + 'px'; f.style.bottom = ''; }
+      else { f.style.bottom = (innerHeight - a.bottom) + 'px'; f.style.top = ''; }
     }
     f.style.background = 'var(--cnfc-card, transparent)';
     return true;
@@ -1632,7 +1634,8 @@ private val STICKY_BUTTONS_JS = """
       var sp = document.createElement('div');
       sp.style.display = 'none';
       f.parentElement.insertBefore(sp, f);
-      bars.push({ f: f, spacer: sp, mode: 'home' });
+      var r0 = f.getBoundingClientRect();
+      bars.push({ f: f, spacer: sp, mode: 'home', left: r0.left, width: r0.width });
       log('Knaprække fundet (' + names(f) + ')');
     }
     placeAll();
