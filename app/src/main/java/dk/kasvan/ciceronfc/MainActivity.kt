@@ -910,7 +910,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 // Afkod, så fx et mellemrum (%20) i Ciceros Hostname-felt kan ses
                 val h = Uri.decode(u.host ?: "").lowercase()
                 checkRfidSetup(u, scheme, h)
-                if (scheme == "https" && isSystematicHost(h) && request.method != "GET" && request.method != "OPTIONS") {
+                if (scheme == "https" && isSystematicHost(h) && request.method !in setOf("GET", "OPTIONS", "HEAD")) {
                     val path = (u.path ?: "").replace(Regex("[0-9a-fA-F-]{8,}|\\d+"), ":id").take(120)
                     LogBuf.add("Cicero gemte: ${request.method} $path")
                 }
@@ -1416,7 +1416,8 @@ private val STORAGE_WATCH_JS = """
 (function () {
   if (window.__cnfcStore) return;
   window.__cnfcStore = true;
-  var BAD = /token|auth|session|jwt|passw|secret|nonce|code|state|kc-|oidc|refresh/i;
+  // Kun navne der ligner login-nøgler springes over; værdier vises alligevel kun, hvis de er korte (true/false o.l.)
+  var BAD = /token|jwt|passw|secret|nonce|refresh|kc-|oidc|bearer|credential/i;
   function snap(st) { var o = {}; try { for (var i = 0; i < st.length; i++) { var k = st.key(i); o[k] = st.getItem(k); } } catch (e) {} return o; }
   function parse(v) { try { return JSON.parse(v); } catch (e) { return undefined; } }
   function leaves(obj, path, out) {
