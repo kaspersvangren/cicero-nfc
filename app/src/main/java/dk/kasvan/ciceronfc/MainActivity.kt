@@ -825,13 +825,12 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             runOnUiThread { onPinFieldFocused() }
         }
 
-        /** Undersøgelse: hvilke gemte indstillinger ændrer sig (kun navne og til/fra – ingen login-data) */
+        /** Pinkode-kontakten i udlånsbilledet melder, om skiftet lykkedes, og hvilken vej */
         @JavascriptInterface
-        fun storageInfo(msg: String) {
-            if (storageReports++ < 60) LogBuf.add("Lager: ${scrub(msg)}")
+        fun pinSetting(msg: String) {
+            LogBuf.add("Pinkode-krav: ${scrub(msg)}")
         }
     }
-    @Volatile private var storageReports = 0
 
     /** Holder øje med, om Ciceros pinkode-felt vælges. Slået fra = Cicero opfører sig som før. */
     private fun injectPinWatcher() {
@@ -910,10 +909,6 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 // Afkod, så fx et mellemrum (%20) i Ciceros Hostname-felt kan ses
                 val h = Uri.decode(u.host ?: "").lowercase()
                 checkRfidSetup(u, scheme, h)
-                if (scheme == "https" && isSystematicHost(h) && request.method !in setOf("GET", "OPTIONS", "HEAD")) {
-                    val path = (u.path ?: "").replace(Regex("[0-9a-fA-F-]{8,}|\\d+"), ":id").take(120)
-                    LogBuf.add("Cicero gemte: ${request.method} $path")
-                }
                 if (scheme != "http") return null
                 if (h in LOCAL_HOSTS) return null
                 if (blockedHosts.add(h)) LogBuf.add("Blokeret usikker forbindelse til '$h'")
@@ -931,7 +926,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 onPageChanged(url, loading = false)
                 injectPinWatcher()
                 web.evaluateJavascript(SWIPE_TABS_JS, null)
-                web.evaluateJavascript(STORAGE_WATCH_JS, null)
+                web.evaluateJavascript(PIN_TOGGLE_JS, null)
                 handler.postDelayed({ detectCiceroTheme() }, 500)
             }
 
@@ -1345,6 +1340,7 @@ private val PIN_WATCHER_JS = """
     if (!window.__cnfcPinOn || !el || el.tagName !== 'INPUT') return;
     if (location.hostname !== 'cicero.systematic.com') return;
     if (el.getAttribute('data-cnfc-skip') === '1') return;
+    if (el.type === 'checkbox' || el.type === 'radio' || (el.closest && el.closest('[data-cnfc]'))) return;
     if (!/pin.?kode|pincode/.test(textOf(el))) return;
     window.__cnfcPinEl = el;
     el.blur();
@@ -1408,64 +1404,164 @@ private val SWIPE_TABS_JS = """
 """
 
 /**
- * Undersøgelse (midlertidig): hvor gemmer Cicero "Pinkode påkrævet ved udlån"? Holder øje med browserens
- * lokale lager og skriver i loggen, hvad der ændrer sig – kun navne og korte værdier som true/false.
- * Alt med login, tokens o.l. springes over.
+ * Kontakten "Pinkode" ved "Send kvittering" i udlånsbilledet. Skifter Ciceros egen indstilling
+ * "Pinkode påkrævet ved udlån" (gemt som DK-<bibliotek>_REQUIRE_PINCODE_ON_CHECKOUT).
+ * Først direkte i lageret; slår det ikke igennem, åbnes Enhedsindstillinger, kontakten skiftes og der trykkes Gem –
+ * de samme klik som i hånden. Rammes Ciceros navne ikke, vises kontakten bare ikke.
  */
-private val STORAGE_WATCH_JS = """
+private val PIN_TOGGLE_JS = """
 (function () {
-  if (window.__cnfcStore) return;
-  window.__cnfcStore = true;
-  // Kun navne der ligner login-nøgler springes over; værdier vises alligevel kun, hvis de er korte (true/false o.l.)
-  var BAD = /token|jwt|passw|secret|nonce|refresh|kc-|oidc|bearer|credential/i;
-  function snap(st) { var o = {}; try { for (var i = 0; i < st.length; i++) { var k = st.key(i); o[k] = st.getItem(k); } } catch (e) {} return o; }
-  function parse(v) { try { return JSON.parse(v); } catch (e) { return undefined; } }
-  function leaves(obj, path, out) {
-    if (obj && typeof obj === 'object') { for (var k in obj) leaves(obj[k], path ? path + '.' + k : k, out); }
-    else out[path] = obj;
-    return out;
+  if (window.__cnfcPinToggle) return;
+  window.__cnfcPinToggle = true;
+  var SUFFIX = '_REQUIRE_PINCODE_ON_CHECKOUT';
+  var busy = false;
+  function report(m) { try { CiceroNFC.pinSetting(m); } catch (e) {} }
+  function key() {
+    var i, k, m;
+    for (i = 0; i < localStorage.length; i++) { k = localStorage.key(i) || ''; if (k.slice(-SUFFIX.length) === SUFFIX) return k; }
+    for (i = 0; i < localStorage.length; i++) { m = /^(DK-\d+)_/.exec(localStorage.key(i) || ''); if (m) return m[1] + SUFFIX; }
+    return null;
   }
-  function safe(v) {
-    if (typeof v === 'boolean' || typeof v === 'number' || v === null) return String(v);
-    if (typeof v === 'string' && v.length <= 30 && !/\d{6,}|@/.test(v)) return JSON.stringify(v);
-    return v === undefined ? '(ingen)' : '…';
-  }
-  function report(m) { try { CiceroNFC.storageInfo(m); } catch (e) {} }
-  function names(o) { return Object.keys(o).filter(function (k) { return !BAD.test(k); }).join(', ') || '(tom)'; }
-  var prev = { l: snap(localStorage), s: snap(sessionStorage) };
-  report('localStorage: ' + names(prev.l));
-  report('sessionStorage: ' + names(prev.s));
-  ['l', 's'].forEach(function (w) {
-    var o = prev[w];
-    for (var k in o) {
-      if (BAD.test(k)) continue;
-      var p = parse(o[k]);
-      if (p && typeof p === 'object') {
-        var lv = leaves(p, '', {});
-        for (var q in lv) if (/pin/i.test(q) && !BAD.test(q)) report('mulig pinkode-indstilling: ' + k + ' → ' + q + ' = ' + safe(lv[q]));
-      } else if (/pin/i.test(k)) report('mulig pinkode-indstilling: ' + k + ' = ' + safe(p === undefined ? o[k] : p));
+  function stored() { var k = key(); return !!k && localStorage.getItem(k) === 'true'; }
+  function visible(el) { return !!(el && el.offsetParent !== null); }
+  function textOf(el) { return ((el && (el.innerText || el.textContent)) || '').trim(); }
+  function findToggle(label) {
+    var list = document.querySelectorAll('mat-slide-toggle, .mat-mdc-slide-toggle');
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i].hasAttribute('data-cnfc') && textOf(list[i]).indexOf(label) >= 0) return list[i];
     }
-  });
-  setInterval(function () {
-    if (location.hostname !== 'cicero.systematic.com') return;
-    var cur = { l: snap(localStorage), s: snap(sessionStorage) };
-    ['l', 's'].forEach(function (w) {
-      var a = prev[w], b = cur[w], where = w === 'l' ? 'localStorage' : 'sessionStorage', keys = {};
-      Object.keys(a).concat(Object.keys(b)).forEach(function (k) { keys[k] = 1; });
-      for (var k in keys) {
-        if (a[k] === b[k] || BAD.test(k)) continue;
-        var pa = parse(a[k]), pb = parse(b[k]);
-        if (pa && pb && typeof pa === 'object' && typeof pb === 'object') {
-          var la = leaves(pa, '', {}), lb = leaves(pb, '', {}), ks = {}, ch = [];
-          Object.keys(la).concat(Object.keys(lb)).forEach(function (x) { ks[x] = 1; });
-          for (var q in ks) if (la[q] !== lb[q] && !BAD.test(q)) ch.push(q + ': ' + safe(la[q]) + ' → ' + safe(lb[q]));
-          if (ch.length) report(where + ' "' + k + '" ændret: ' + ch.slice(0, 5).join('; '));
-        } else {
-          report(where + ' "' + k + '" ændret: ' + safe(pa === undefined ? a[k] : pa) + ' → ' + safe(pb === undefined ? b[k] : pb));
-        }
-      }
+    return null;
+  }
+  function switchOf(t) { return t.querySelector('button[role=switch], input[type=checkbox]') || t; }
+  function isOn(t) {
+    var b = switchOf(t);
+    if (b.getAttribute && b.getAttribute('aria-checked') != null) return b.getAttribute('aria-checked') === 'true';
+    if (b.type === 'checkbox') return b.checked;
+    return t.classList.contains('mat-mdc-slide-toggle-checked') || t.classList.contains('mat-checked');
+  }
+  function pinFieldShown() {
+    var ins = document.querySelectorAll('input');
+    for (var i = 0; i < ins.length; i++) {
+      var el = ins[i];
+      if (!visible(el)) continue;
+      var ff = el.closest('mat-form-field, .mat-mdc-form-field');
+      var t = ((ff ? textOf(ff) : '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+      if (/pin.?kode/.test(t)) return true;
+    }
+    return false;
+  }
+  function waitFor(fn, ms) {
+    return new Promise(function (res) {
+      var t0 = Date.now();
+      (function poll() {
+        var v = null;
+        try { v = fn(); } catch (e) {}
+        if (v) return res(v);
+        if (Date.now() - t0 > ms) return res(null);
+        setTimeout(poll, 100);
+      })();
     });
-    prev = cur;
-  }, 1500);
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function setLook(t, on) {
+    t.classList.toggle('mat-mdc-slide-toggle-checked', on);
+    t.classList.toggle('mat-checked', on);
+    var b = t.querySelector('button[role=switch]');
+    if (b) {
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.classList.toggle('mdc-switch--selected', on);
+      b.classList.toggle('mdc-switch--checked', on);
+      b.classList.toggle('mdc-switch--unselected', !on);
+    }
+    var cb = t.querySelector('input[type=checkbox]');
+    if (cb) cb.checked = on;
+  }
+
+  // Enhedsindstillinger: åbn, skift, Gem – Ciceros egne klik
+  function viaSettings(want) {
+    var hide = document.createElement('style');
+    hide.textContent = '.cdk-overlay-container { opacity: 0 !important; }';
+    document.head.appendChild(hide);
+    var user = sessionStorage.getItem('username') || '';
+    function done(r) { hide.remove(); return r; }
+    var chip = Array.prototype.slice.call(document.querySelectorAll('button, [role=button], a')).filter(function (b) {
+      var t = textOf(b);
+      return user && t.indexOf(user) >= 0 && t.length < 80 && visible(b);
+    })[0];
+    if (!chip) return Promise.resolve(done('fandt ikke brugermenuen'));
+    chip.click();
+    return waitFor(function () {
+      var tg = findToggle('Pinkode påkrævet');
+      if (tg) return { tg: tg };
+      var items = document.querySelectorAll('[role=menuitem], .mat-mdc-menu-item, button, a');
+      for (var i = 0; i < items.length; i++) if (textOf(items[i]) === 'Enhedsindstillinger' && visible(items[i])) return { item: items[i] };
+      return null;
+    }, 3000).then(function (r) {
+      if (!r) return null;
+      if (r.tg) return r.tg;
+      r.item.click();
+      return waitFor(function () { return findToggle('Pinkode påkrævet'); }, 3000);
+    }).then(function (tg) {
+      if (!tg) return done('fandt ikke Enhedsindstillinger');
+      // Står den allerede rigtigt, skiftes der frem og tilbage, så Gem kan trykkes
+      var clicks = isOn(tg) === want ? 2 : 1;
+      var p = Promise.resolve();
+      for (var c = 0; c < clicks; c++) p = p.then(function () { switchOf(tg).click(); return sleep(150); });
+      return p.then(function () {
+        return waitFor(function () {
+          var bs = document.querySelectorAll('button');
+          for (var i = 0; i < bs.length; i++) if (textOf(bs[i]) === 'Gem' && visible(bs[i]) && !bs[i].disabled) return bs[i];
+          return null;
+        }, 2000);
+      }).then(function (gem) {
+        if (!gem) return done('fandt ikke Gem');
+        gem.click();
+        return sleep(400).then(function () { return done('ok'); });
+      });
+    }).catch(function (e) { return done('fejl: ' + e); });
+  }
+
+  function change(want) {
+    if (busy) return;
+    busy = true;
+    var k = key();
+    if (k) localStorage.setItem(k, want ? 'true' : 'false');
+    sync();
+    waitFor(function () { return pinFieldShown() === want ? true : null; }, 800).then(function (ok) {
+      if (ok) return 'direkte';
+      return viaSettings(want).then(function (r) { return r === 'ok' ? 'via Enhedsindstillinger' : 'kunne ikke skifte – ' + r; });
+    }).then(function (how) {
+      busy = false;
+      sync();
+      report((want ? 'til' : 'fra') + ' (' + how + ')');
+    });
+  }
+
+  // Sæt kontakten ind ved "Send kvittering" og hold den opdateret, også når Cicero tegner siden om
+  function sync() {
+    var host = findToggle('Send kvittering');
+    var mine = document.querySelector('[data-cnfc="pin"]');
+    if (!host) return;
+    if (!mine || mine.previousElementSibling !== host) {
+      if (mine) mine.remove();
+      mine = host.cloneNode(true);
+      mine.setAttribute('data-cnfc', 'pin');
+      mine.removeAttribute('id');
+      Array.prototype.forEach.call(mine.querySelectorAll('[id], [for]'), function (e) { e.removeAttribute('id'); e.removeAttribute('for'); });
+      var w = document.createTreeWalker(mine, NodeFilter.SHOW_TEXT, null);
+      var n;
+      while ((n = w.nextNode())) if (n.nodeValue.indexOf('Send kvittering') >= 0) n.nodeValue = n.nodeValue.replace('Send kvittering', 'Pinkode');
+      mine.style.marginLeft = '16px';
+      mine.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        change(!stored());
+      }, true);
+      host.parentNode.insertBefore(mine, host.nextSibling);
+    }
+    setLook(mine, stored());
+    mine.style.opacity = busy ? '0.5' : '';
+  }
+  setInterval(function () { if (location.hostname === 'cicero.systematic.com') sync(); }, 800);
 })();
 """
