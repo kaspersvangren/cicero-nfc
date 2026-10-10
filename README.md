@@ -57,7 +57,7 @@ Mens værktøjet er åbent, får Cicero ikke besked om tags.
 - Kontakten "Pinkode" ved "Send kvittering" i udlånsbilledet.
 - Knaprækken Nulstil/Søg under søgeformularer bliver i bunden af skærmen.
 
-App'en ændrer kun udseendet; Ciceros data og logik røres ikke.
+App'en ændrer kun udseendet; Ciceros data og logik røres ikke. Alle tre slås til og fra på én gang i menuen ⋮ → Tilpasninger af Cicero (fx før en fejl meldes til Systematic).
 
 ## Data og sikkerhed
 

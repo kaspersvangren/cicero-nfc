@@ -67,6 +67,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         const val CICERO_HOST = "cicero.systematic.com"
         const val PREF_PIN_PAD = "pinPad"
         const val PREF_PIN_FLIP = "pinPadFlip"
+        const val PREF_TWEAKS = "ciceroTweaks" // app'ens ændringer af Ciceros udseende
         const val PREF_PIN_BIG = "pinPadBig"
     }
 
@@ -704,6 +705,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             isCheckable = true
             isChecked = prefs().getBoolean(PREF_PIN_FLIP, false)
         }
+        m.menu.add(0, 12, 6, "Tilpasninger af Cicero").apply {
+            isCheckable = true
+            isChecked = prefs().getBoolean(PREF_TWEAKS, true)
+        }
         m.menu.add(0, 11, 6, "Værktøj til tags")
         m.menu.add(0, 7, 6, "Søg efter opdatering")
         m.menu.add(0, 8, 7, "Ændringer")
@@ -724,6 +729,13 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     injectPinWatcher()
                 }
                 10 -> toggleFlip()
+                12 -> {
+                    // Swipe-faner, pinkode-kontakten og knaprækken. Slås fra fx før en fejl meldes til Systematic.
+                    val on = !prefs().getBoolean(PREF_TWEAKS, true)
+                    prefs().edit().putBoolean(PREF_TWEAKS, on).apply()
+                    LogBuf.add(if (on) "Tilpasninger af Cicero slået til" else "Tilpasninger af Cicero slået fra – Cicero vises som standard")
+                    web.reload()
+                }
                 11 -> startActivity(Intent(this, TagToolActivity::class.java).putExtra(TagToolActivity.EXTRA_DARK, pal === darkPalette))
             }
             true
@@ -957,9 +969,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             override fun onPageFinished(view: WebView, url: String) {
                 onPageChanged(url, loading = false)
                 injectPinWatcher()
-                web.evaluateJavascript(SWIPE_TABS_JS, null)
-                web.evaluateJavascript(PIN_TOGGLE_JS, null)
-                web.evaluateJavascript(STICKY_BUTTONS_JS, null)
+                if (prefs().getBoolean(PREF_TWEAKS, true)) {
+                    web.evaluateJavascript(SWIPE_TABS_JS, null)
+                    web.evaluateJavascript(PIN_TOGGLE_JS, null)
+                    web.evaluateJavascript(STICKY_BUTTONS_JS, null)
+                }
                 handler.postDelayed({ detectCiceroTheme() }, 500)
             }
 
@@ -1473,6 +1487,27 @@ private val STICKY_BUTTONS_JS = """
     }
     return el;
   }
+  // Gør bunden lav: ingen ekstra luft, og tomme pyntebokse (fx streger) skjules
+  function compact(f, row) {
+    var chain = [];
+    for (var e = row; e; e = e.parentElement) { chain.push(e); if (e === f) break; }
+    chain.forEach(function (e) {
+      e.style.marginTop = '0'; e.style.marginBottom = '0'; e.style.minHeight = '0';
+      if (e !== f) { e.style.paddingTop = '0'; e.style.paddingBottom = '0'; }
+      if (e !== row) e.style.height = 'auto';
+    });
+    f.style.paddingTop = '4px';
+    f.style.paddingBottom = '4px';
+    chain.forEach(function (e) {
+      if (e === row) return;
+      for (var i = 0; i < e.children.length; i++) {
+        var c = e.children[i];
+        if (chain.indexOf(c) >= 0) continue;
+        if (c.matches('button, a, input, [role=button]') || c.querySelector('button, a, input, [role=button]') || txt(c)) continue;
+        c.style.display = 'none';
+      }
+    });
+  }
   function makeSticky(f) {
     var nav = navHeight();
     var sc = scroller(f);
@@ -1524,6 +1559,7 @@ private val STICKY_BUTTONS_JS = """
         if (!row) { log('Nulstil fundet, men ingen Søg-knap ved siden af'); continue; }
         f = footerOf(row);
         makeSticky(f);
+        compact(f, row);
         log('Knaprække fundet (' + names(f) + ')');
       }
       f.style.background = bgOf(f);
