@@ -1406,8 +1406,8 @@ private val SWIPE_TABS_JS = """
 /**
  * Kontakten "Pinkode" ved "Send kvittering" i udlånsbilledet. Skifter Ciceros egen indstilling
  * "Pinkode påkrævet ved udlån" (gemt som DK-<bibliotek>_REQUIRE_PINCODE_ON_CHECKOUT).
- * Først direkte i lageret; slår det ikke igennem, åbnes Enhedsindstillinger, kontakten skiftes og der trykkes Gem –
- * de samme klik som i hånden. Rammes Ciceros navne ikke, vises kontakten bare ikke.
+ * Cicero læser kun indstillingen, når man trykker Gem, så app'en åbner Enhedsindstillinger skjult, skifter
+ * kontakten og trykker Gem – de samme klik som i hånden. Rammes Ciceros navne ikke, vises kontakten bare ikke.
  */
 private val PIN_TOGGLE_JS = """
 (function () {
@@ -1439,17 +1439,6 @@ private val PIN_TOGGLE_JS = """
     if (b.type === 'checkbox') return b.checked;
     return t.classList.contains('mat-mdc-slide-toggle-checked') || t.classList.contains('mat-checked');
   }
-  function pinFieldShown() {
-    var ins = document.querySelectorAll('input');
-    for (var i = 0; i < ins.length; i++) {
-      var el = ins[i];
-      if (!visible(el)) continue;
-      var ff = el.closest('mat-form-field, .mat-mdc-form-field');
-      var t = ((ff ? textOf(ff) : '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
-      if (/pin.?kode/.test(t)) return true;
-    }
-    return false;
-  }
   function waitFor(fn, ms) {
     return new Promise(function (res) {
       var t0 = Date.now();
@@ -1478,12 +1467,47 @@ private val PIN_TOGGLE_JS = """
   }
 
   // Enhedsindstillinger: åbn, skift, Gem – Ciceros egne klik
+  var panelLogged = false;
   function viaSettings(want) {
     var hide = document.createElement('style');
     hide.textContent = '.cdk-overlay-container { opacity: 0 !important; }';
     document.head.appendChild(hide);
     var user = sessionStorage.getItem('username') || '';
-    function done(r) { hide.remove(); return r; }
+    var page = findToggle('Send kvittering');
+    var hidden = [];
+    // Det øverste element, der ikke også rummer selve udlånsbilledet = panelet
+    function panelRoot(el) {
+      var r = null;
+      while (el && el !== document.body && el !== document.documentElement && !(page && el.contains(page))) { r = el; el = el.parentElement; }
+      return r;
+    }
+    function hideNode(n) {
+      var root = panelRoot(n.nodeType === 1 ? n : n.parentElement);
+      if (!root || hidden.indexOf(root) >= 0) return;
+      root.style.setProperty('visibility', 'hidden', 'important');
+      hidden.push(root);
+      if (!panelLogged) {
+        panelLogged = true;
+        report('panel skjult: ' + root.tagName.toLowerCase() + ' ' + String(root.className || '').slice(0, 60));
+      }
+    }
+    // Kører, før browseren tegner de nye elementer – så panelet aldrig ses
+    var mo = new MutationObserver(function (list) {
+      list.forEach(function (m) {
+        Array.prototype.forEach.call(m.addedNodes, function (n) {
+          var t = n.textContent || '';
+          if (t.indexOf('Enhedsindstillinger') >= 0 || t.indexOf('Pinkode påkrævet') >= 0) hideNode(n);
+        });
+      });
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+    function done(r) {
+      mo.disconnect();
+      hide.remove();
+      // Lukkede panelet ikke (fejl), skal det kunne ses igen
+      setTimeout(function () { hidden.forEach(function (h) { if (h.isConnected) h.style.removeProperty('visibility'); }); }, 600);
+      return r;
+    }
     var chip = Array.prototype.slice.call(document.querySelectorAll('button, [role=button], a')).filter(function (b) {
       var t = textOf(b);
       return user && t.indexOf(user) >= 0 && t.length < 80 && visible(b);
@@ -1524,12 +1548,9 @@ private val PIN_TOGGLE_JS = """
   function change(want) {
     if (busy) return;
     busy = true;
-    var k = key();
-    if (k) localStorage.setItem(k, want ? 'true' : 'false');
     sync();
-    waitFor(function () { return pinFieldShown() === want ? true : null; }, 800).then(function (ok) {
-      if (ok) return 'direkte';
-      return viaSettings(want).then(function (r) { return r === 'ok' ? 'via Enhedsindstillinger' : 'kunne ikke skifte – ' + r; });
+    viaSettings(want).then(function (r) {
+      return r === 'ok' ? 'ok' : 'kunne ikke skifte – ' + r;
     }).then(function (how) {
       busy = false;
       sync();
@@ -1538,10 +1559,35 @@ private val PIN_TOGGLE_JS = """
   }
 
   // Sæt kontakten ind ved "Send kvittering" og hold den opdateret, også når Cicero tegner siden om
+  function onLoanTab() {
+    var tabs = document.querySelectorAll('[role=tab]');
+    for (var i = 0; i < tabs.length; i++) {
+      var t = tabs[i];
+      if (t.getAttribute('aria-selected') === 'true' || t.classList.contains('mdc-tab--active')) return /udl[åa]n/i.test(textOf(t));
+    }
+    return false;
+  }
+  function place(host, mine) {
+    var parent = host.parentNode;
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+    var lab = host.querySelector('label, .mdc-label') || host;
+    var pr = parent.getBoundingClientRect(), lr = lab.getBoundingClientRect(), hr = host.getBoundingClientRect();
+    mine.style.position = 'absolute';
+    mine.style.margin = '0';
+    var left = lr.right - pr.left + 24;
+    if (pr.left + left + mine.offsetWidth > pr.right) {
+      // For smal skærm: under "Send kvittering", på linje med den
+      mine.style.left = (hr.left - pr.left) + 'px';
+      mine.style.top = (hr.bottom - pr.top + 4) + 'px';
+    } else {
+      mine.style.left = left + 'px';
+      mine.style.top = (hr.top - pr.top) + 'px';
+    }
+  }
   function sync() {
     var host = findToggle('Send kvittering');
     var mine = document.querySelector('[data-cnfc="pin"]');
-    if (!host) return;
+    if (!host || !onLoanTab()) { if (mine) mine.remove(); return; }
     if (!mine || mine.previousElementSibling !== host) {
       if (mine) mine.remove();
       mine = host.cloneNode(true);
@@ -1551,7 +1597,6 @@ private val PIN_TOGGLE_JS = """
       var w = document.createTreeWalker(mine, NodeFilter.SHOW_TEXT, null);
       var n;
       while ((n = w.nextNode())) if (n.nodeValue.indexOf('Send kvittering') >= 0) n.nodeValue = n.nodeValue.replace('Send kvittering', 'Pinkode');
-      mine.style.marginLeft = '16px';
       mine.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -1561,6 +1606,7 @@ private val PIN_TOGGLE_JS = """
     }
     setLook(mine, stored());
     mine.style.opacity = busy ? '0.5' : '';
+    place(host, mine);
   }
   setInterval(function () { if (location.hostname === 'cicero.systematic.com') sync(); }, 800);
 })();
