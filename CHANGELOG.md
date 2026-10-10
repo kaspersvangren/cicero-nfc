@@ -1,5 +1,6 @@
 # Ændringer
 
+- **Næste version** – Tekststørrelse som i Chrome (følger ikke længere telefonens skriftstørrelse). Midlertidig undersøgelse i loggen af, hvor Cicero gemmer "Pinkode påkrævet ved udlån".
 - **0.1.32** – Fanerækken øverst i Cicero (fx Bookinger, Fjernlån) kan swipes; pilene er væk. Pinkode-tastaturet nulstiller ikke længere cifrene, hvis Cicero åbner det to gange. Overflødig kode fjernet.
 - **0.1.31** – Knappen "Stor" på pinkode-tastaturet giver store taster med gult på sort til svagtseende. Mere nyttig log (opstart, side, tema, NFC, oplåsning, nedbrud) uden personoplysninger. Oprydning i koden; materialer i flere dele vises nu som "del 1/2".
 - **0.1.30** – Lys/mørk tilstand aflæses mere sikkert (lånerbilledets mørkeblå top narrer den ikke længere). Pinkode op til 16 cifre; overskriften hedder "Indtast pinkode".

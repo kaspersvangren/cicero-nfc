@@ -824,7 +824,14 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         fun pinFocus() {
             runOnUiThread { onPinFieldFocused() }
         }
+
+        /** Undersøgelse: hvilke gemte indstillinger ændrer sig (kun navne og til/fra – ingen login-data) */
+        @JavascriptInterface
+        fun storageInfo(msg: String) {
+            if (storageReports++ < 60) LogBuf.add("Lager: ${scrub(msg)}")
+        }
     }
+    @Volatile private var storageReports = 0
 
     /** Holder øje med, om Ciceros pinkode-felt vælges. Slået fra = Cicero opfører sig som før. */
     private fun injectPinWatcher() {
@@ -882,6 +889,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             setSupportZoom(true)
             builtInZoomControls = true
             displayZoomControls = false
+            // Samme tekststørrelse som i Chrome (ellers følger den telefonens skriftstørrelse, og Ciceros layout skrider)
+            textZoom = 100
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
 
@@ -901,6 +910,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 // Afkod, så fx et mellemrum (%20) i Ciceros Hostname-felt kan ses
                 val h = Uri.decode(u.host ?: "").lowercase()
                 checkRfidSetup(u, scheme, h)
+                if (scheme == "https" && isSystematicHost(h) && request.method != "GET" && request.method != "OPTIONS") {
+                    val path = (u.path ?: "").replace(Regex("[0-9a-fA-F-]{8,}|\\d+"), ":id").take(120)
+                    LogBuf.add("Cicero gemte: ${request.method} $path")
+                }
                 if (scheme != "http") return null
                 if (h in LOCAL_HOSTS) return null
                 if (blockedHosts.add(h)) LogBuf.add("Blokeret usikker forbindelse til '$h'")
@@ -918,6 +931,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 onPageChanged(url, loading = false)
                 injectPinWatcher()
                 web.evaluateJavascript(SWIPE_TABS_JS, null)
+                web.evaluateJavascript(STORAGE_WATCH_JS, null)
                 handler.postDelayed({ detectCiceroTheme() }, 500)
             }
 
@@ -1390,5 +1404,67 @@ private val SWIPE_TABS_JS = """
       try { t.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' }); } catch (x) {}
     }, 50);
   }, true);
+})();
+"""
+
+/**
+ * Undersøgelse (midlertidig): hvor gemmer Cicero "Pinkode påkrævet ved udlån"? Holder øje med browserens
+ * lokale lager og skriver i loggen, hvad der ændrer sig – kun navne og korte værdier som true/false.
+ * Alt med login, tokens o.l. springes over.
+ */
+private val STORAGE_WATCH_JS = """
+(function () {
+  if (window.__cnfcStore) return;
+  window.__cnfcStore = true;
+  var BAD = /token|auth|session|jwt|passw|secret|nonce|code|state|kc-|oidc|refresh/i;
+  function snap(st) { var o = {}; try { for (var i = 0; i < st.length; i++) { var k = st.key(i); o[k] = st.getItem(k); } } catch (e) {} return o; }
+  function parse(v) { try { return JSON.parse(v); } catch (e) { return undefined; } }
+  function leaves(obj, path, out) {
+    if (obj && typeof obj === 'object') { for (var k in obj) leaves(obj[k], path ? path + '.' + k : k, out); }
+    else out[path] = obj;
+    return out;
+  }
+  function safe(v) {
+    if (typeof v === 'boolean' || typeof v === 'number' || v === null) return String(v);
+    if (typeof v === 'string' && v.length <= 30 && !/\d{6,}|@/.test(v)) return JSON.stringify(v);
+    return v === undefined ? '(ingen)' : '…';
+  }
+  function report(m) { try { CiceroNFC.storageInfo(m); } catch (e) {} }
+  function names(o) { return Object.keys(o).filter(function (k) { return !BAD.test(k); }).join(', ') || '(tom)'; }
+  var prev = { l: snap(localStorage), s: snap(sessionStorage) };
+  report('localStorage: ' + names(prev.l));
+  report('sessionStorage: ' + names(prev.s));
+  ['l', 's'].forEach(function (w) {
+    var o = prev[w];
+    for (var k in o) {
+      if (BAD.test(k)) continue;
+      var p = parse(o[k]);
+      if (p && typeof p === 'object') {
+        var lv = leaves(p, '', {});
+        for (var q in lv) if (/pin/i.test(q) && !BAD.test(q)) report('mulig pinkode-indstilling: ' + k + ' → ' + q + ' = ' + safe(lv[q]));
+      } else if (/pin/i.test(k)) report('mulig pinkode-indstilling: ' + k + ' = ' + safe(p === undefined ? o[k] : p));
+    }
+  });
+  setInterval(function () {
+    if (location.hostname !== 'cicero.systematic.com') return;
+    var cur = { l: snap(localStorage), s: snap(sessionStorage) };
+    ['l', 's'].forEach(function (w) {
+      var a = prev[w], b = cur[w], where = w === 'l' ? 'localStorage' : 'sessionStorage', keys = {};
+      Object.keys(a).concat(Object.keys(b)).forEach(function (k) { keys[k] = 1; });
+      for (var k in keys) {
+        if (a[k] === b[k] || BAD.test(k)) continue;
+        var pa = parse(a[k]), pb = parse(b[k]);
+        if (pa && pb && typeof pa === 'object' && typeof pb === 'object') {
+          var la = leaves(pa, '', {}), lb = leaves(pb, '', {}), ks = {}, ch = [];
+          Object.keys(la).concat(Object.keys(lb)).forEach(function (x) { ks[x] = 1; });
+          for (var q in ks) if (la[q] !== lb[q] && !BAD.test(q)) ch.push(q + ': ' + safe(la[q]) + ' → ' + safe(lb[q]));
+          if (ch.length) report(where + ' "' + k + '" ændret: ' + ch.slice(0, 5).join('; '));
+        } else {
+          report(where + ' "' + k + '" ændret: ' + safe(pa === undefined ? a[k] : pa) + ' → ' + safe(pb === undefined ? b[k] : pb));
+        }
+      }
+    });
+    prev = cur;
+  }, 1500);
 })();
 """
