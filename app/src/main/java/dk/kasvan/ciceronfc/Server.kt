@@ -31,7 +31,6 @@ object Server {
     const val PORT = 1667
 
     private const val ALLOWED_ORIGIN = "https://cicero.systematic.com"
-    private val ALLOWED_HOSTS = setOf("localhost", "127.0.0.1", "[::1]")
     private const val MAX_SSE_CLIENTS = 4
     private const val MAX_HEADER_LINES = 64
     private const val MAX_HEADER_BYTES = 16_384
@@ -132,7 +131,7 @@ object Server {
             val host = req.headers["host"]?.let { hostOnly(it) }
 
             // Kun Cicero Mobile, og kun rettet til localhost (beskytter mod andre sider og DNS-tricks)
-            if (origin != ALLOWED_ORIGIN || host !in ALLOWED_HOSTS) {
+            if (origin != ALLOWED_ORIGIN || host !in Hub.LOCAL_HOSTS) {
                 LogBuf.add("Afvist forespørgsel (${origin ?: "uden afsender"} → ${req.path})")
                 respond(out, 403, "text/plain", "Forbidden", null)
                 sock.close()
@@ -162,7 +161,10 @@ object Server {
 
             val r = route(req)
             if (req.path != "/.status") {
-                val q = if (req.query.isEmpty()) "" else "?" + req.query.entries.joinToString("&") { "${it.key}=${it.value}" }
+                // Kun materialenummer og tag-id vises; ukendte felter logges uden værdi (de kunne indeholde andet)
+                val q = if (req.query.isEmpty()) "" else "?" + req.query.entries.joinToString("&") {
+                    if (it.key == "barcode" || it.key == "tagid") "${it.key}=${it.value.take(32)}" else "${it.key}=…"
+                }
                 LogBuf.add("Cicero → ${req.method} ${req.path}$q → ${r.code}")
             } else {
                 LogBuf.add("Cicero → /.status (test forbindelse)")

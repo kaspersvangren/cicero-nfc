@@ -7,9 +7,14 @@ import java.io.IOException
 
 /**
  * Et ISO 15693-tag (ICODE SLIX/SLIX2 m.fl.) læst med telefonens NFC.
- * Alle kald skal ske fra Hub's ene arbejdstråd.
+ * Hvert PhoneTag bruges kun fra én tråd ad gangen (Hub's eller værktøjets arbejdstråd).
  */
 class PhoneTag(tag: Tag) {
+    companion object {
+        // 0x20 læs blok, 0x21 skriv blok, 0x23 læs flere blokke, 0x27 skriv AFI, 0x2B systeminfo
+        private val ALLOWED = setOf(0x20, 0x21, 0x23, 0x27, 0x2B)
+    }
+
     private val nfcv: NfcV = NfcV.get(tag) ?: throw IOException("Ikke et ISO 15693-tag")
 
     /** UID som tagget vil have det i kommandoer (mindst betydende byte først). */
@@ -36,6 +41,9 @@ class PhoneTag(tag: Tag) {
     }
 
     private fun cmd(flags: Int, code: Int, vararg extra: Byte): ByteArray {
+        // Sikkerhedsnet: kun læse- og skrivekommandoer. Lås-kommandoerne (0x22 lås blok, 0x28 lås AFI,
+        // 0x2A lås DSFID m.fl.) kan ikke fortrydes og må aldrig sendes – heller ikke ved en fejl i koden.
+        require(code in ALLOWED) { "kommando 0x%02X er ikke tilladt".format(code) }
         if (!nfcv.isConnected) nfcv.connect()
         val b = ByteArray(10 + extra.size)
         b[0] = flags.toByte()

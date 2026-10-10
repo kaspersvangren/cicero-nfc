@@ -9,7 +9,7 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * Små bip med præcis tonehøjde, så "alarm fra" (to stigende) og "alarm til" (ét dybt)
+ * Små bip med præcis tonehøjde, så "alarm fra" (to stigende) og "alarm til" (to faldende, "ka-pling")
  * kan skelnes på lyden alene. Afspilles som medie, så de høres i lydløs tilstand.
  */
 object Beeper {

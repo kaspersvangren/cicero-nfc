@@ -137,11 +137,14 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private var authCancel: CancellationSignal? = null
 
     // Hvilken side Cicero står på – login-siden betyder "ikke logget ind", og så låser app'en ikke
-    private var pageHost: String? = null
+    @Volatile private var pageHost: String? = null
     private var pageLoading = false
     private var waitingForPage = false
     /** Låst op, fordi login-siden stod fremme – tidspunktet, så et login uden tryk kan opdages */
     private var loginUnlockAt = -1L
+    // Låst op med fingeraftryk/pinkode (ikke bare fordi Cicero stod på login-siden) – kræves til Værktøj til tags
+    private var userUnlocked = false
+    private var openToolAfterUnlock = false
     private val delayedAuth = Runnable {
         waitingForPage = false
         if (Hub.locked && resumed) authenticate()
@@ -150,7 +153,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Hub.start(applicationContext)
-        Hub.configuredLibrary = getSharedPreferences("ui", MODE_PRIVATE).getString("library", null)
+        Hub.configuredLibrary = getSharedPreferences("ui", MODE_PRIVATE).getString(Hub.PREF_LIBRARY, null)
         nfc = NfcAdapter.getDefaultAdapter(this)
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val saved = prefs().getString("ciceroTheme", null)
@@ -216,7 +219,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         }
         bar.addView(rfidIcon, LinearLayout.LayoutParams(dp(26), dp(26)))
 
-        // Lille farvet pille med klokke: grøn = alarm fra, orange = alarm til, rød = fejl
+        // Lille farvet pille med klokke: grøn = alarm fra, orange = alarm til, rød = fejl, grå = læst
         pillBg = GradientDrawable().apply { cornerRadius = dp(12).toFloat() }
         pill = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -395,6 +398,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         if (!isDeviceSecure()) return
         if (!Hub.locked) LogBuf.add("Låst")
         Hub.locked = true
+        userUnlocked = false
         Hub.onLocked()
         pinPad.hide()
         closePopups()
@@ -405,8 +409,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         Hub.locked = false
         Hub.lastActivity = SystemClock.elapsedRealtime()
         loginUnlockAt = if (byLoginPage) Hub.lastActivity else -1L
+        userUnlocked = !byLoginPage
         LogBuf.add(reason)
         refreshLockUi()
+        if (userUnlocked && openToolAfterUnlock) { openToolAfterUnlock = false; openTagTool() }
     }
 
     private fun onLoginPage() = pageHost == LOGIN_HOST
@@ -428,7 +434,6 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         }
     }
 
-    /** Kaldes, når Cicero skifter side (også når login-siden kommer frem efter udløbet login). */
     private var lastSection: String? = null
 
     /** Log hvilken del af Cicero der vises – kun første del af adressen, uden tal (adresser kan indeholde lånernumre) */
@@ -448,6 +453,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         }
     }
 
+    /** Kaldes, når Cicero skifter side (også når login-siden kommer frem efter udløbet login). */
     private fun onPageChanged(url: String, loading: Boolean?) {
         val u = Uri.parse(url)
         pageHost = u.host?.lowercase()
@@ -559,6 +565,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                         authEnded()
+                        openToolAfterUnlock = false
                         // Fx "for mange forsøg" eller "intet fingeraftryk registreret" – hjælper når låsen driller
                         if (Hub.locked) LogBuf.add("Oplåsning afbrudt: $errString ($errorCode)")
                     }
@@ -589,7 +596,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != unlockRequestCode) return
         authEnded()
-        if (resultCode == RESULT_OK) unlock()
+        if (resultCode == RESULT_OK) unlock() else openToolAfterUnlock = false
     }
 
     /** Ethvert tryk tæller som brug */
@@ -627,7 +634,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
     /**
      * Cicero har sin egen mørke tilstand (Udseende), uafhængig af telefonens.
-     * Vi aflæser farven øverst på Cicero-siden og følger den.
+     * Vi aflæser baggrundsfarven flere steder i den nederste del af Cicero-siden og følger den.
      */
     private val themeProbe = """
         (function () {
@@ -736,7 +743,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     LogBuf.add(if (on) "Tilpasninger af Cicero slået til" else "Tilpasninger af Cicero slået fra – Cicero vises som standard")
                     web.reload()
                 }
-                11 -> startActivity(Intent(this, TagToolActivity::class.java).putExtra(TagToolActivity.EXTRA_DARK, pal === darkPalette))
+                11 -> if (userUnlocked || !isDeviceSecure()) openTagTool() else {
+                    // Fx låst op af login-siden: værktøjet kan ændre tags, så telefonens lås kræves først
+                    openToolAfterUnlock = true
+                    authenticate()
+                }
             }
             true
         }
@@ -790,10 +801,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         val port = if (u.port != -1) u.port else if (scheme == "https") 443 else 80
         // Tjek både Hostname og Port – begge kan være forkerte på én gang
         val details = ArrayList<String>()
-        val hostBad = host !in LOCAL_HOSTS
+        val hostBad = host !in Hub.LOCAL_HOSTS
         val portBad = port != Server.PORT
         if (hostBad) {
-            details += if (host.trim() in LOCAL_HOSTS) {
+            details += if (host.trim() in Hub.LOCAL_HOSTS) {
                 "Hostname har et mellemrum: '$host'"
             } else {
                 "Hostname er '$host' – skal være localhost"
@@ -842,14 +853,13 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
     private fun prefs() = getSharedPreferences("ui", MODE_PRIVATE)
 
-    /** Fjern det, der kan være personoplysninger: forespørgsler i adresser, e-mails og lange tal */
-    private fun scrub(msg: String) = msg
-        .replace(Regex("\\?[^\\s\"']*"), "?…")
-        .replace(Regex("[\\w.+-]+@[\\w-]+\\.[\\w.]+"), "…@…")
-        .replace(Regex("\\d{6,}"), "…")
-        .take(250)
+    private fun scrub(msg: String) = LogBuf.scrub(msg)
 
     private fun isSystematicHost(h: String) = h == "systematic.com" || h.endsWith(".systematic.com")
+
+    // Cicero og de login-tjenester, Cicero kan sende videre til (Systematic, KOMBIT/FKA, MitID)
+    private fun isTrustedHost(h: String) = listOf("systematic.com", "kombit.dk", "nemlog-in.dk", "mitid.dk")
+        .any { h == it || h.endsWith(".$it") }
 
     private fun toggleFlip() {
         val flip = !prefs().getBoolean(PREF_PIN_FLIP, false)
@@ -861,17 +871,20 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     private inner class PinBridge {
         @JavascriptInterface
         fun pinFocus() {
+            if (pageHost != CICERO_HOST) return
             runOnUiThread { onPinFieldFocused() }
         }
 
         /** Pinkode-kontakten i udlånsbilledet melder, om skiftet lykkedes, og hvilken vej */
         @JavascriptInterface
         fun pinSetting(msg: String) {
+            if (pageHost != CICERO_HOST) return
             LogBuf.add("Pinkode-krav: ${scrub(msg)}")
         }
 
         @JavascriptInterface
         fun tweak(msg: String) {
+            if (pageHost != CICERO_HOST) return
             LogBuf.add("Tilpasning: ${scrub(msg)}")
         }
     }
@@ -898,6 +911,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     /** Sæt koden i Ciceros felt. Kun cifre, så intet andet kan sendes ind på siden. */
     private fun fillPin(pin: String) {
         if (pin.isEmpty() || !pin.all { it in '0'..'9' }) return
+        // Koden må kun gå til Ciceros egen side
+        if (Uri.parse(web.url ?: "").host?.lowercase() != CICERO_HOST) {
+            LogBuf.add("Pinkode ikke udfyldt – siden var skiftet")
+            return
+        }
         web.evaluateJavascript(PIN_FILL_JS.replace("%PIN%", pin)) { r ->
             LogBuf.add(if (r?.contains("ok") == true) "Pinkode udfyldt" else "Pinkode-feltet var forsvundet")
         }
@@ -938,10 +956,15 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
 
         web.webViewClient = object : WebViewClient() {
-            // Almindelige web-adresser (Cicero, login) bliver i app'en; andet (mailto:, tel:, apps) åbnes udenfor
+            // Cicero og login bliver i app'en. Andre hjemmesider åbnes i telefonens browser, så de aldrig
+            // får adgang til app'ens funktioner. Omdirigeringer (fx et fremtidigt MitID-login) får lov.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val scheme = request.url.scheme?.lowercase() ?: return true
-                if (scheme == "http" || scheme == "https") return false
+                if (scheme == "https" || scheme == "http") {
+                    val h = request.url.host?.lowercase() ?: ""
+                    if (!request.isForMainFrame || request.isRedirect || isTrustedHost(h)) return false
+                    LogBuf.add("Åbnet i browseren: $h")
+                }
                 openExternal(request.url.toString())
                 return true
             }
@@ -954,7 +977,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 val h = Uri.decode(u.host ?: "").lowercase()
                 checkRfidSetup(u, scheme, h)
                 if (scheme != "http") return null
-                if (h in LOCAL_HOSTS) return null
+                if (h in Hub.LOCAL_HOSTS) return null
                 if (blockedHosts.add(h)) LogBuf.add("Blokeret usikker forbindelse til '$h'")
                 return WebResourceResponse(
                     "text/plain", "utf-8", 403, "Forbidden",
@@ -963,6 +986,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                // Pinkode-tastaturet hører til den side, der bad om det
+                if (pinPad.isShowing) pinPad.hide()
                 onPageChanged(url, loading = true)
             }
 
@@ -1001,12 +1026,12 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                 return true
             }
 
-            // Cicero beder om kameraet (scan lånernr.). Kun Ciceros egen side får lov.
+            // Cicero beder om kameraet (scan lånernr.). Kun Ciceros egen side (cicero.systematic.com) får lov.
             override fun onPermissionRequest(request: PermissionRequest) {
                 val wantsCamera = request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
                 val host = request.origin?.host ?: ""
                 val https = request.origin?.scheme == "https"
-                if (!wantsCamera || !https || !isSystematicHost(host)) {
+                if (!wantsCamera || !https || host != CICERO_HOST) {
                     request.deny()
                     return
                 }
@@ -1313,6 +1338,10 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             .track()
     }
 
+    private fun openTagTool() {
+        startActivity(Intent(this, TagToolActivity::class.java).putExtra(TagToolActivity.EXTRA_DARK, pal === darkPalette))
+    }
+
     /** Åbn uden for app'en (Chrome, mail, telefon …). Web-indhold får aldrig lov at starte en bestemt app direkte. */
     private fun openExternal(url: String) {
         try {
@@ -1358,7 +1387,6 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
     }
 }
 
-private val LOCAL_HOSTS = setOf("localhost", "127.0.0.1", "::1", "[::1]")
 
 /** De adresser, Cicero kalder på en Deichman-RFID-læser */
 private val RFID_PATHS = setOf(
@@ -1521,7 +1549,6 @@ private val STICKY_BUTTONS_JS = """
   }
   function makeFixed(f) {
     var sp = document.createElement('div');
-    sp.setAttribute('data-cnfc-spacer', '1');
     sp.style.height = f.offsetHeight + 'px';
     f.parentElement.insertBefore(sp, f);
     f.__cnfcSpacer = sp;
@@ -1663,7 +1690,6 @@ private val PIN_TOGGLE_JS = """
   }
 
   // Enhedsindstillinger: åbn, skift, Gem – Ciceros egne klik
-  var panelLogged = false;
   function viaSettings(want) {
     var hide = document.createElement('style');
     hide.textContent = '.cdk-overlay-container { opacity: 0 !important; }';
@@ -1682,10 +1708,6 @@ private val PIN_TOGGLE_JS = """
       if (!root || hidden.indexOf(root) >= 0) return;
       root.style.setProperty('visibility', 'hidden', 'important');
       hidden.push(root);
-      if (!panelLogged) {
-        panelLogged = true;
-        report('panel skjult: ' + root.tagName.toLowerCase() + ' ' + String(root.className || '').slice(0, 60));
-      }
     }
     // Kører, før browseren tegner de nye elementer – så panelet aldrig ses
     var mo = new MutationObserver(function (list) {

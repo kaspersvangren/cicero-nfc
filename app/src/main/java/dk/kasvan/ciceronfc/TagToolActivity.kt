@@ -1,7 +1,6 @@
 package dk.kasvan.ciceronfc
 
 import android.app.AlertDialog
-import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -13,9 +12,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
@@ -41,9 +37,6 @@ import java.util.concurrent.TimeUnit
 class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     companion object {
         const val EXTRA_DARK = "dark"
-        private const val AFI_ON = 0x07   // sikret
-        private const val AFI_OFF = 0xC2  // udlånt
-        private const val PREF_LIBRARY = "library"
         private const val FORGET_AFTER_MS = 10_000L // kortet forsvinder 10 sek. efter chippen er fjernet
     }
 
@@ -58,20 +51,21 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
     private class Pending(val barcode: String, var part: Int, val total: Int)
 
-    // Farver som Cicero (lys/mørk)
+    // Farver som Cicero (lys/mørk) – fælles med kameraet
     private var dark = true
-    private val bg get() = if (dark) Color.parseColor("#2E2E2E") else Color.parseColor("#F2F5F7")
-    private val card get() = if (dark) Color.parseColor("#383838") else Color.WHITE
-    private val fg get() = if (dark) Color.parseColor("#F2F2F2") else Color.parseColor("#404040")
-    private val sub get() = if (dark) Color.parseColor("#C6C6C6") else Color.parseColor("#767676")
-    private val keyBg get() = if (dark) Color.parseColor("#4B4B4B") else Color.parseColor("#E0E0E0")
-    private val blue get() = if (dark) Color.parseColor("#3098E8") else Color.parseColor("#0078D3")
-    private val green = Color.parseColor("#2F855A")
-    private val orange = Color.parseColor("#DD6B20")
-    private val red = Color.parseColor("#C53030")
-    private val tileBg get() = if (dark) Color.parseColor("#454545") else Color.parseColor("#F2F5F7")
-    private val warnBg get() = if (dark) Color.parseColor("#5A2626") else Color.parseColor("#FDE8E8")
-    private val warnFg get() = if (dark) Color.parseColor("#FEB2B2") else Color.parseColor("#9B2C2C")
+    private lateinit var tc: ToolColors
+    private val bg get() = tc.bg
+    private val card get() = tc.card
+    private val fg get() = tc.fg
+    private val sub get() = tc.sub
+    private val keyBg get() = tc.key
+    private val blue get() = tc.blue
+    private val green get() = tc.green
+    private val orange get() = tc.orange
+    private val red get() = tc.red
+    private val tileBg get() = tc.tile
+    private val warnBg get() = tc.warnBg
+    private val warnFg get() = tc.warnFg
 
     private val exec = Executors.newSingleThreadScheduledExecutor()
     private val handler = Handler(Looper.getMainLooper())
@@ -120,8 +114,9 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         dark = intent.getBooleanExtra(EXTRA_DARK, true)
+        tc = ToolColors(dark)
+        Hub.configuredLibrary = prefs().getString(Hub.PREF_LIBRARY, null)
         nfc = NfcAdapter.getDefaultAdapter(this)
-        Hub.configuredLibrary = prefs().getString(PREF_LIBRARY, null)
         buildUi()
         showInfo()
         exec.scheduleWithFixedDelay({ presenceCheck() }, 400, 400, TimeUnit.MILLISECONDS)
@@ -368,8 +363,8 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         }
         if (!i.danish && !i.blank) out += Field("Format", "ikke dansk", Kind.WARN)
         out += when (i.afi) {
-            AFI_ON -> Field("Alarm", "Til", Kind.ALARM_ON)
-            AFI_OFF -> Field("Alarm", "Fra", Kind.ALARM_OFF)
+            Hub.AFI_ON -> Field("Alarm", "Til", Kind.ALARM_ON)
+            Hub.AFI_OFF -> Field("Alarm", "Fra", Kind.ALARM_OFF)
             null -> Field("Alarm", "ukendt", Kind.WARN)
             else -> Field("Alarm", "anden (0x%02X)".format(i.afi), Kind.WARN)
         }
@@ -526,7 +521,7 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
     private fun alarm(on: Boolean) {
         withTag(if (on) "Alarm til" else "Alarm fra") { t, i ->
-            t.writeAfi(if (on) AFI_ON else AFI_OFF)
+            t.writeAfi(if (on) Hub.AFI_ON else Hub.AFI_OFF)
             LogBuf.add("Værktøj: alarm ${if (on) "til" else "fra"} på ${i.content?.barcode ?: i.mac}")
             if (on) "Alarm slået til ✓" else "Alarm slået fra ✓"
         }
@@ -630,7 +625,7 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
             t.writeBlocks(bytes)
             val check = TagContent.parse(t.readBlocks(0, 8))
             if (check.barcode != p.barcode) throw IllegalStateException("kontrol-læsning viste '${check.barcode}'")
-            t.writeAfi(AFI_ON)
+            t.writeAfi(Hub.AFI_ON)
             lastWrittenMac = i.mac
             info = readInfo(t)
             showInfo()
@@ -686,7 +681,7 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                 if (v.isEmpty() || v.length > 9 || !v.all { it.isLetterOrDigit() }) {
                     say("Biblioteksnummeret skal være 1-9 tal/bogstaver", orange)
                 } else {
-                    prefs().edit().putString(PREF_LIBRARY, v).apply()
+                    prefs().edit().putString(Hub.PREF_LIBRARY, v).apply()
                     Hub.configuredLibrary = v
                     updateLibraryText()
                     LogBuf.add("Biblioteksnummer sat til DK-$v")
@@ -699,20 +694,15 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
     // ---------- Livscyklus ----------
 
-    private fun vibrate(pattern: LongArray) {
-        try {
-            val v: Vibrator = if (Build.VERSION.SDK_INT >= 31) {
-                getSystemService(VibratorManager::class.java).defaultVibrator
-            } else {
-                @Suppress("DEPRECATION")
-                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            }
-            v.vibrate(VibrationEffect.createWaveform(pattern, -1))
-        } catch (_: Exception) {}
-    }
+    // Samme vibration som resten af app'en (kommer også igennem i lydløs)
+    private fun vibrate(pattern: LongArray) = Hub.vibrate(pattern)
 
-    /** Ethvert tryk tæller som brug, så app'en ikke låser midt i arbejdet */
+    /**
+     * Ethvert tryk tæller som brug, så app'en ikke låser midt i arbejdet. Er app'en låst eller
+     * har den ikke været brugt i 5 minutter, lukkes værktøjet i stedet, og hovedskærmen låser.
+     */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (Hub.locked || Hub.idleTooLong()) { finish(); return true }
         Hub.lastActivity = SystemClock.elapsedRealtime()
         return super.dispatchTouchEvent(ev)
     }
@@ -720,14 +710,15 @@ class TagToolActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     private val idleCheck = object : Runnable {
         override fun run() {
             // 5 minutter uden brug: luk værktøjet, så app'en låser som normalt
-            if (SystemClock.elapsedRealtime() - Hub.lastActivity >= MainActivity.LOCK_AFTER_MS) { finish(); return }
+            if (Hub.locked || Hub.idleTooLong()) { finish(); return }
             handler.postDelayed(this, 10_000)
         }
     }
 
     override fun onResume() {
         super.onResume()
-        if (Hub.locked) { finish(); return }
+        // Kommer man tilbage efter mere end 5 minutter, må værktøjet ikke stå åbent uden oplåsning
+        if (Hub.locked || Hub.idleTooLong()) { finish(); return }
         val opts = Bundle().apply { putInt(NfcAdapter.EXTRA_READER_PRESENCE_CHECK_DELAY, 500) }
         nfc?.enableReaderMode(
             this, this,

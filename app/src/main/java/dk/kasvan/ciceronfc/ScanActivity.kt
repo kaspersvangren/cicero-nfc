@@ -67,6 +67,7 @@ class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     private var camera: Camera? = null
     private var torch = false
     private var dark = true
+    private lateinit var tc: ToolColors
     private val candidates = LinkedHashMap<String, Candidate>()
     private var lastUiUpdate = 0L
     private var notReadyLogged = false
@@ -91,9 +92,10 @@ class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         dark = intent.getBooleanExtra(EXTRA_DARK, true)
-        val bg = if (dark) Color.parseColor("#2E2E2E") else Color.parseColor("#F2F5F7")
-        val fg = if (dark) Color.parseColor("#F2F2F2") else Color.parseColor("#404040")
-        val sub = if (dark) Color.parseColor("#C6C6C6") else Color.parseColor("#767676")
+        tc = ToolColors(dark)
+        val bg = tc.bg
+        val fg = tc.fg
+        val sub = tc.sub
         executor = Executors.newSingleThreadExecutor()
 
         preview = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
@@ -307,8 +309,8 @@ class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                 .take(5)
         }
         list.removeAllViews()
-        val fg = if (dark) Color.parseColor("#F2F2F2") else Color.parseColor("#404040")
-        val key = if (dark) Color.parseColor("#4B4B4B") else Color.parseColor("#E0E0E0")
+        val fg = tc.fg
+        val key = tc.key
         for (c in shown) {
             list.addView(TextView(this).apply {
                 val kind = when {
@@ -333,11 +335,20 @@ class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         }
     }
 
+    /** Tryk tæller som brug; er app'en låst eller glemt i 5 minutter, lukkes kameraet i stedet */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (Hub.locked || Hub.idleTooLong()) { finish(); return true }
+        Hub.lastActivity = SystemClock.elapsedRealtime()
+        return super.dispatchTouchEvent(ev)
+    }
+
     // Holder på NFC, mens kameraet er fremme – ellers melder Android "ingen understøttede apps", når bogen er tæt på
     override fun onTagDiscovered(tag: android.nfc.Tag?) {}
 
     override fun onResume() {
         super.onResume()
+        // Kommer man tilbage efter mere end 5 minutter, lukkes kameraet og værktøjet, så app'en låser
+        if (Hub.locked || Hub.idleTooLong()) { finish(); return }
         try {
             nfc?.enableReaderMode(this, this,
                 NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B or NfcAdapter.FLAG_READER_NFC_F or

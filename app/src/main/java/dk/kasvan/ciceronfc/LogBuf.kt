@@ -33,6 +33,13 @@ object LogBuf {
     }
 
     fun text(): String = synchronized(this) { lines.joinToString("\n") }
+
+    /** Fjern det, der kan være personoplysninger: forespørgsler i adresser, e-mails og lange tal */
+    fun scrub(msg: String) = msg
+        .replace(Regex("\\?[^\\s\"']*"), "?…")
+        .replace(Regex("[\\w.+-]+@[\\w-]+\\.[\\w.]+"), "…@…")
+        .replace(Regex("\\d{6,}"), "…")
+        .take(250)
 }
 
 /**
@@ -51,7 +58,9 @@ object CrashLog {
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             try {
                 val top = e.stackTrace.take(8).joinToString("\n") { "  at $it" }
-                f.writeText("${Date()} ${e.javaClass.name}: ${e.message?.take(200)}\n$top")
+                // Fejlteksten kan i sjældne tilfælde indeholde data fra siden
+                val msg = LogBuf.scrub(e.message ?: "").take(200)
+                f.writeText("${Date()} ${e.javaClass.name}: $msg\n$top")
             } catch (_: Exception) {}
             prev?.uncaughtException(t, e)
         }

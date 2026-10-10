@@ -20,8 +20,8 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="Cicero NFC"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
-        android:usesCleartextTraffic="true">
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity
             android:name=".MainActivity"
@@ -43,13 +43,11 @@
             android:name=".TagToolActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize"
             android:exported="false"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
             android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".ScanActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+            android:exported="false" />
 
         <!-- Play-tjenester henter tekst- og stregkodegenkendelsen allerede ved installation -->
         <meta-data

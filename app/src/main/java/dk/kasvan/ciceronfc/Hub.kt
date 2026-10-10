@@ -60,6 +60,16 @@ object Hub {
     @Volatile var lastLibrary: String? = null
         private set
 
+    const val AFI_ON = 0x07   // alarm til (sikret)
+    const val AFI_OFF = 0xC2  // alarm fra (udlånt)
+    const val PREF_LIBRARY = "library"
+
+    /** Adresser, der betyder "denne telefon" – Ciceros RFID-opsætning og app'ens egen server */
+    val LOCAL_HOSTS = setOf("localhost", "127.0.0.1", "::1", "[::1]")
+
+    /** Ingen tryk i 5 minutter: så skal app'en låses, uanset hvilken skærm der er fremme */
+    fun idleTooLong() = SystemClock.elapsedRealtime() - lastActivity >= MainActivity.LOCK_AFTER_MS
+
     /**
      * Husker længden på materialenumre fra eget bibliotek, så kameraet i værktøjet kan sætte
      * numre med den rigtige længde øverst. Kun længden gemmes – aldrig selve numrene.
@@ -140,23 +150,23 @@ object Hub {
         statusDetail = detail
         when (fb) {
             // Læst: kort tik (70 ms) i fuld styrke
-            Fb.READ -> buzz(longArrayOf(0, 70), intArrayOf(0, 255))
+            Fb.READ -> vibrate(longArrayOf(0, 70), intArrayOf(0, 255))
             // Alarm fra: "ka-pling" op (A4 → E5) + dobbelt-vibration
             Fb.ALARM_OFF -> {
-                buzz(longArrayOf(0, 110, 80, 110))
+                vibrate(longArrayOf(0, 110, 80, 110))
                 Beeper.chime(Beeper.Note(0, 440.0, 380), Beeper.Note(110, 659.3, 650))
             }
             // Alarm til: samme "ka-pling", bare ned (E5 → A4) + én lang vibration
             Fb.ALARM_ON -> {
-                buzz(longArrayOf(0, 450))
+                vibrate(longArrayOf(0, 450))
                 Beeper.chime(Beeper.Note(0, 659.3, 380), Beeper.Note(110, 440.0, 650))
             }
             Fb.WRITTEN -> {
-                buzz(longArrayOf(0, 110, 80, 110))
+                vibrate(longArrayOf(0, 110, 80, 110))
                 Beeper.play(660 to 90, 0 to 40, 660 to 90)
             }
             Fb.ERROR -> {
-                buzz(longArrayOf(0, 80, 70, 80, 70, 80))
+                vibrate(longArrayOf(0, 80, 70, 80, 70, 80))
                 Beeper.play(220 to 550)
             }
             Fb.IDLE, Fb.SEEN -> {}
@@ -188,7 +198,7 @@ object Hub {
         // Låst: ellers kunne man fx aflevere bøger uden at låse op
         if (locked) {
             LogBuf.add("Bog ignoreret – app'en er låst")
-            buzz(longArrayOf(0, 80, 70, 80, 70, 80))
+            vibrate(longArrayOf(0, 80, 70, 80, 70, 80))
             return
         }
         lastActivity = SystemClock.elapsedRealtime()
@@ -319,7 +329,7 @@ object Hub {
     class Result(val code: Int, val body: String, val json: Boolean = false)
 
     fun alarm(on: Boolean): Result = onExec {
-        val value = if (on) 0x07 else 0xC2
+        val value = if (on) AFI_ON else AFI_OFF
         val word = if (on) "TIL (sikret)" else "FRA (udlånt)"
         if (locked) return@onExec Result(423, "Locked")
         if (inventory.isEmpty()) {
@@ -407,8 +417,8 @@ object Hub {
     // ---------- Hjælpere ----------
 
     fun afiText(afi: Int?): String = when (afi) {
-        0x07 -> "sikret"
-        0xC2 -> "udlånt"
+        AFI_ON -> "sikret"
+        AFI_OFF -> "udlånt"
         null -> "ukendt"
         else -> "0x%02X".format(afi)
     }
@@ -427,7 +437,7 @@ object Hub {
 
     // Vibration mærket som "alarm", så den også kommer igennem i lydløs tilstand
     @Suppress("DEPRECATION")
-    private fun buzz(pattern: LongArray, amplitudes: IntArray? = null) {
+    fun vibrate(pattern: LongArray, amplitudes: IntArray? = null) {
         try {
             val v: Vibrator = if (Build.VERSION.SDK_INT >= 31) {
                 ctx.getSystemService(VibratorManager::class.java).defaultVibrator

@@ -61,21 +61,26 @@ App'en ændrer kun udseendet; Ciceros data og logik røres ikke. Alle tre slås 
 
 ## Data og sikkerhed
 
-- App'en gemmer kun det samme som en almindelig browser (login, mellemlager) samt om
-  Cicero vises lyst eller mørkt. Den sender selv ingen data nogen steder hen; al trafik
-  ud af telefonen er Cicero Mobiles egen, bortset fra opdateringstjekket nedenfor.
+- App'en gemmer det samme som en almindelig browser (login, mellemlager) og egne indstillinger:
+  lys/mørk, pinkode-tastatur, tilpasninger, biblioteksnummer, den sædvanlige længde på
+  materialenumre (kun længden) og hvilken version man sidst har set. Den sender selv ingen data
+  nogen steder hen; al trafik ud af telefonen er Cicero Mobiles egen, bortset fra opdateringstjekket nedenfor.
 - Loggen (materialenumre og RFID-kommandoer) ligger kun i hukommelsen og forsvinder,
-  når app'en lukkes. Den skrives ikke til telefonens systemlog.
+  når app'en lukkes. Den skrives ikke til telefonens systemlog. Går app'en ned, gemmes en kort
+  fejlbeskrivelse (uden lånerdata) i en fil, som lægges i loggen ved næste start og derefter slettes.
 - Intet følger med til skyen eller en ny telefon.
 - App'en tjekker GitHub for nye versioner (højst hver 6. time) og tilbyder at opdatere sig selv.
   Der sendes ingen data; den spørger kun efter seneste version. Android installerer kun en
   opdatering med samme digitale segl som den installerede app.
-- App'en låser sig efter 5 minutter uden brug og ved opstart. Den låses op med telefonens
-  egen skærmlås (fingeraftryk, ansigt eller pinkode). Mens den er låst, er Cicero skjult,
-  og bøger hverken læses eller ændres.
+- App'en låser sig efter 5 minutter uden brug og ved opstart – også når Værktøj til tags eller
+  kameraet står fremme. Den låses op med telefonens egen skærmlås (fingeraftryk, ansigt eller pinkode).
+  Mens den er låst, er Cicero skjult, og bøger hverken læses eller ændres. Værktøj til tags kræver
+  altid oplåsning, også når Cicero står på login-siden.
 - Den lokale server svarer kun forespørgsler fra Cicero Mobile
   (`https://cicero.systematic.com`) rettet til localhost.
-- Kameraet (scanning af lånerkort) gives kun til Ciceros egen side.
+- Kameraet (scanning af lånerkort) gives kun til Ciceros egen side, og pinkoden sendes kun dertil.
+- Andre hjemmesider end Cicero og login åbnes i telefonens browser, ikke i app'en.
+- Ukrypteret forbindelse er kun tilladt til app'ens egen server på telefonen.
 - Værktøjets kamera genkender tal og stregkoder på selve telefonen (Googles ML Kit via Play-tjenester).
   Billeder gemmes ikke og sendes ikke; Play-tjenester kan sende anonym brugsstatistik om genkendelsen til Google.
 - Links, der åbner et nyt vindue, åbnes i telefonens browser.
@@ -90,6 +95,7 @@ App'en ændrer kun udseendet; Ciceros data og logik røres ikke. Alle tre slås 
 | `/start`, `/stop` | Cicero begynder/holder op med at lytte |
 | `/alarmOn`, `/alarmOff` | sætter AFI til 0x07 (sikret) / 0xC2 (udlånt) |
 | `/write?barcode=` | programmerer tagget efter den danske RFID-datamodel |
+| `/writetagbarcode?tagid=&barcode=` | programmerer et bestemt tag (ud fra tag-id) |
 
 Protokollen er genskabt ud fra go-feig (MIT-licens, Deichman bibliotek, Oslo).
 Der er ikke kopieret kode fra go-feig.
