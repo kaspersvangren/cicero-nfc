@@ -371,7 +371,23 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             .setMessage("Telefonen har ingen skærmlås (fingeraftryk eller pinkode), så Cicero NFC kan ikke låse sig selv. Slå skærmlås til i telefonens indstillinger.")
             .setPositiveButton("Indstillinger") { _, _ -> startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }
             .setNegativeButton("OK", null)
-            .show()
+            .track()
+    }
+
+    // Menu og dialoger ligger i egne vinduer over låseskærmen – de lukkes, når app'en låser
+    private var openMenu: PopupMenu? = null
+    private val dialogs = ArrayList<AlertDialog>()
+
+    private fun AlertDialog.Builder.track(): AlertDialog {
+        dialogs.removeAll { !it.isShowing }
+        return show().also { dialogs += it }
+    }
+
+    private fun closePopups() {
+        openMenu?.dismiss()
+        openMenu = null
+        dialogs.forEach { try { if (it.isShowing) it.dismiss() } catch (_: Exception) {} }
+        dialogs.clear()
     }
 
     private fun lock() {
@@ -380,6 +396,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
         Hub.locked = true
         Hub.onLocked()
         pinPad.hide()
+        closePopups()
         refreshLockUi()
     }
 
@@ -498,7 +515,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             .setMessage(msg)
             .setPositiveButton("OK", null)
             .setNeutralButton("Alle ændringer") { _, _ -> showChangelog() }
-            .show()
+            .track()
     }
 
     private fun showChangelog() {
@@ -512,7 +529,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             .setTitle("Ændringer")
             .setMessage(msg)
             .setPositiveButton("OK", null)
-            .show()
+            .track()
     }
 
     /** Telefonens egen skærmlås: fingeraftryk, ansigt eller pinkode. App'en ser aldrig selve koden. */
@@ -673,6 +690,8 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
 
     private fun showMenu(anchor: View) {
         val m = PopupMenu(this, anchor)
+        openMenu = m
+        m.setOnDismissListener { if (openMenu === m) openMenu = null }
         m.menu.add(0, 1, 0, if (logScroll.visibility == View.VISIBLE) "Skjul log" else "Vis log")
         m.menu.add(0, 2, 1, "Del log")
         m.menu.add(0, 3, 2, "Genindlæs Cicero")
@@ -723,7 +742,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             )
             .setPositiveButton("OK", null)
             .setNeutralButton("Licenser") { _, _ -> showLicenses() }
-            .show()
+            .track()
     }
 
     private fun showLicenses() {
@@ -745,7 +764,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     "License is distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.",
             )
             .setPositiveButton("OK", null)
-            .show()
+            .track()
     }
 
     /**
@@ -804,7 +823,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     "Tryk Test forbindelse og gem. Beskeden forsvinder, når Cicero bruger den rigtige adresse.",
             )
             .setPositiveButton("OK", null)
-            .show()
+            .track()
     }
 
     // ---------- Pinkode-tastatur ----------
@@ -1231,11 +1250,11 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     error != null -> AlertDialog.Builder(this)
                         .setTitle("Kunne ikke tjekke for opdatering")
                         .setMessage(error)
-                        .setPositiveButton("OK", null).show()
+                        .setPositiveButton("OK", null).track()
                     else -> AlertDialog.Builder(this)
                         .setTitle("Ingen ny version")
                         .setMessage("Du har den nyeste version (${BuildConfigInfo.version(this)}).")
-                        .setPositiveButton("OK", null).show()
+                        .setPositiveButton("OK", null).track()
                 }
             }
         }
@@ -1255,7 +1274,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
                     startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
                 }
                 .setNegativeButton("Ikke nu", null)
-                .show()
+                .track()
             return
         }
         confirmUpdate()
@@ -1271,7 +1290,7 @@ class MainActivity : Activity(), NfcAdapter.ReaderCallback {
             )
             .setPositiveButton("Opdater") { _, _ -> Updater.downloadAndInstall(this, info) }
             .setNegativeButton("Ikke nu", null)
-            .show()
+            .track()
     }
 
     /** Åbn uden for app'en (Chrome, mail, telefon …). Web-indhold får aldrig lov at starte en bestemt app direkte. */

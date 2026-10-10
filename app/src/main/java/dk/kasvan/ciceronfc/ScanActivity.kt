@@ -5,10 +5,14 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Rect
+import android.nfc.NfcAdapter
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.SystemClock
+import android.util.Size
+import android.view.MotionEvent
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -18,9 +22,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -32,19 +40,20 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Kamera, der læser materialenummeret – både stregkoder og trykte tal (fx på en etiket i bogen).
  * Viser de numre, den kan se; man trykker på det rigtige. Alt genkendes på telefonen; intet sendes nogen steder hen.
  */
-class ScanActivity : ComponentActivity() {
+class ScanActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     companion object {
         const val EXTRA_VALUE = "value"
         const val EXTRA_DARK = "dark"
         private val DIGITS = Regex("""(?<![0-9])[0-9](?:[ \-]?[0-9]){7,15}(?![0-9])""")
     }
 
-    private class Candidate(val value: String, val barcode: Boolean, var lastSeen: Long, var hits: Int)
+    private class Candidate(val value: String, val barcode: Boolean, var lastSeen: Long, var hits: Int, var inFrame: Int)
 
     private lateinit var executor: ExecutorService
     // Lukkes skærmen midt i en genkendelse, må det sene svar ikke få app'en til at gå ned
@@ -58,6 +67,12 @@ class ScanActivity : ComponentActivity() {
     private val candidates = LinkedHashMap<String, Candidate>()
     private var lastUiUpdate = 0L
     private var notReadyLogged = false
+    private var zoomed = true
+    private lateinit var camBox: FrameLayout
+    private val nfc by lazy { NfcAdapter.getDefaultAdapter(this) }
+    // Sigte-rammens størrelse på skærmen
+    private val frameW get() = dp(280)
+    private val frameH get() = dp(120)
 
     private val barcodes by lazy { BarcodeScanning.getClient() }
     private val texts by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
@@ -84,12 +99,17 @@ class ScanActivity : ComponentActivity() {
                 cornerRadius = dp(12).toFloat()
             }
         }
-        val camBox = FrameLayout(this).apply {
+        camBox = FrameLayout(this).apply {
             addView(preview, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-            addView(frame, FrameLayout.LayoutParams(dp(280), dp(120), Gravity.CENTER))
+            addView(frame, FrameLayout.LayoutParams(frameW, frameH, Gravity.CENTER))
+        }
+        // Tryk på billedet for at stille skarpt dér
+        preview.setOnTouchListener { v, e ->
+            if (e.action == MotionEvent.ACTION_UP) { focusAt(e.x, e.y); v.performClick() }
+            true
         }
         hint = TextView(this).apply {
-            text = "Peg på materialenummeret – stregkode eller tal. Tryk på det rigtige nummer nedenfor."
+            text = "Peg på materialenummeret – stregkode eller tal. Tryk på billedet for skarpt billede, og på det rigtige nummer nedenfor."
             textSize = 15f
             setTextColor(sub)
             setPadding(dp(16), dp(10), dp(16), dp(6))
@@ -117,6 +137,11 @@ class ScanActivity : ComponentActivity() {
             camera?.cameraControl?.enableTorch(torch)
             b.text = if (torch) "Lys fra" else "Lys til"
         })
+        bottom.addView(smallButton("Zoom 1×") { b ->
+            zoomed = !zoomed
+            applyZoom()
+            b.text = if (zoomed) "Zoom 1×" else "Zoom 2×"
+        })
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(bg)
@@ -142,13 +167,22 @@ class ScanActivity : ComponentActivity() {
         future.addListener({
             try {
                 val provider = future.get()
-                val pv = Preview.Builder().build().also { it.setSurfaceProvider(preview.surfaceProvider) }
+                // Samme billedformat til visning og genkendelse, så rammen passer; større billede = skarpere tal
+                val sel = ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(ResolutionStrategy(Size(1920, 1080), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
+                    .build()
+                val pv = Preview.Builder().setResolutionSelector(sel).build().also { it.setSurfaceProvider(preview.surfaceProvider) }
                 val analysis = ImageAnalysis.Builder()
+                    .setResolutionSelector(sel)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                 analysis.setAnalyzer(executor) { analyze(it) }
                 provider.unbindAll()
                 camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, pv, analysis)
+                // 2× zoom fra start: telefonen holdes længere væk, hvor den kan stille skarpt (og fri af chippen)
+                applyZoom()
+                preview.post { focusAt(preview.width / 2f, preview.height / 2f) }
             } catch (e: Exception) {
                 LogBuf.add("Kamera kunne ikke starte: ${e.message}")
                 hint.text = "Kameraet kunne ikke starte"
@@ -156,11 +190,43 @@ class ScanActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    private fun applyZoom() {
+        val c = camera ?: return
+        val max = c.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f
+        c.cameraControl.setZoomRatio(if (zoomed) minOf(2f, max) else 1f)
+    }
+
+    private fun focusAt(x: Float, y: Float) {
+        val c = camera ?: return
+        try {
+            val point = preview.meteringPointFactory.createPoint(x, y)
+            c.cameraControl.startFocusAndMetering(
+                FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+                    .setAutoCancelDuration(4, TimeUnit.SECONDS)
+                    .build()
+            )
+        } catch (_: Exception) {}
+    }
+
+    /** Sigte-rammen omregnet til billedets koordinater (lidt større, så små skævheder ikke betyder noget). */
+    private fun frameInImage(w: Int, h: Int): Rect? {
+        val vw = camBox.width; val vh = camBox.height
+        if (vw == 0 || vh == 0 || w == 0 || h == 0) return null
+        val scale = maxOf(vw.toFloat() / w, vh.toFloat() / h) // FILL_CENTER
+        val hw = frameW * 0.75f / scale; val hh = frameH * 0.9f / scale
+        return Rect((w / 2 - hw).toInt(), (h / 2 - hh).toInt(), (w / 2 + hw).toInt(), (h / 2 + hh).toInt())
+    }
+
     @SuppressLint("UnsafeOptInUsageError")
     private fun analyze(p: ImageProxy) {
         val media = p.image
         if (media == null) { p.close(); return }
-        val img = InputImage.fromMediaImage(media, p.imageInfo.rotationDegrees)
+        val rot = p.imageInfo.rotationDegrees
+        val upW = if (rot % 180 == 0) p.width else p.height
+        val upH = if (rot % 180 == 0) p.height else p.width
+        val box = frameInImage(upW, upH)
+        fun inside(r: Rect?) = box != null && r != null && box.contains(r.centerX(), r.centerY())
+        val img = InputImage.fromMediaImage(media, rot)
         val tb = barcodes.process(img)
         val tt = texts.process(img)
         Tasks.whenAllComplete(tb, tt).addOnCompleteListener(safe) {
@@ -168,13 +234,16 @@ class ScanActivity : ComponentActivity() {
             if (tb.isSuccessful) {
                 for (b in tb.result) {
                     val v = b.rawValue?.trim() ?: continue
-                    if (v.length in 1..16 && v.all { it.code in 0x21..0x7E }) add(v, true, now)
+                    if (v.length in 1..16 && v.all { it.code in 0x21..0x7E }) add(v, true, now, inside(b.boundingBox))
                 }
             }
             if (tt.isSuccessful) {
-                for (m in DIGITS.findAll(tt.result.text)) {
-                    val v = m.value.filter { it.isDigit() }
-                    if (v.length in 8..16) add(v, false, now)
+                for (block in tt.result.textBlocks) for (line in block.lines) {
+                    val inF = inside(line.boundingBox)
+                    for (m in DIGITS.findAll(line.text)) {
+                        val v = m.value.filter { it.isDigit() }
+                        if (v.length in 8..16) add(v, false, now, inF)
+                    }
                 }
             } else if (!notReadyLogged) {
                 // Fx første gang, mens Play-tjenester stadig henter tekstgenkendelsen
@@ -189,11 +258,11 @@ class ScanActivity : ComponentActivity() {
         }
     }
 
-    private fun add(v: String, barcode: Boolean, now: Long) {
+    private fun add(v: String, barcode: Boolean, now: Long, inFrame: Boolean) {
         synchronized(candidates) {
             val c = candidates[v]
-            if (c == null) candidates[v] = Candidate(v, barcode, now, 1)
-            else { c.lastSeen = now; c.hits++ }
+            if (c == null) candidates[v] = Candidate(v, barcode, now, 1, if (inFrame) 1 else 0)
+            else { c.lastSeen = now; c.hits++; if (inFrame) c.inFrame++ }
         }
     }
 
@@ -202,7 +271,12 @@ class ScanActivity : ComponentActivity() {
         val shown = synchronized(candidates) {
             // Glem numre, der ikke er set i 6 sekunder; stregkoder og ofte sete tal øverst
             candidates.values.removeAll { now - it.lastSeen > 6000 }
-            candidates.values.sortedWith(compareByDescending<Candidate> { it.barcode }.thenByDescending { it.hits }).take(5)
+            // Tal skal ses mindst 2 gange (stregkoder har kontrolciffer), og et tal, der er en del af
+            // et længere nummer (fx uden første ciffer), vises ikke
+            val sure = candidates.values.filter { it.barcode || it.hits >= 2 }
+            sure.filter { c -> sure.none { o -> o !== c && o.value.length > c.value.length && o.value.contains(c.value) } }
+                .sortedWith(compareByDescending<Candidate> { it.barcode }.thenByDescending { it.inFrame }.thenByDescending { it.hits })
+                .take(5)
         }
         list.removeAllViews()
         val fg = if (dark) Color.parseColor("#F2F2F2") else Color.parseColor("#404040")
@@ -223,6 +297,24 @@ class ScanActivity : ComponentActivity() {
                 setMargins(0, dp(4), 0, dp(4))
             })
         }
+    }
+
+    // Holder på NFC, mens kameraet er fremme – ellers melder Android "ingen understøttede apps", når bogen er tæt på
+    override fun onTagDiscovered(tag: android.nfc.Tag?) {}
+
+    override fun onResume() {
+        super.onResume()
+        try {
+            nfc?.enableReaderMode(this, this,
+                NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B or NfcAdapter.FLAG_READER_NFC_F or
+                    NfcAdapter.FLAG_READER_NFC_V or NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK or NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS,
+                null)
+        } catch (_: Exception) {}
+    }
+
+    override fun onPause() {
+        super.onPause()
+        try { nfc?.disableReaderMode(this) } catch (_: Exception) {}
     }
 
     override fun onDestroy() {
