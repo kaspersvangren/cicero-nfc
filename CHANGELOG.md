@@ -1,6 +1,6 @@
 # Ændringer
 
-- **Næste version** – Knaprækken Nulstil/Søg svæver nu altid nederst på skærmen, også når man ruller ned i søgeresultatet, og den følger lys/mørk tilstand.
+- **0.1.43** – Knaprækken Nulstil/Søg svæver nu altid nederst på skærmen, også når man ruller ned i søgeresultatet, og den følger lys/mørk tilstand.
 - **0.1.42** – Sikkerhedsrettelser efter uafhængig gennemgang: Værktøj til tags og kameraet låser også efter 5 minutter, og værktøjet kræver altid oplåsning. Andre hjemmesider åbnes i browseren; pinkode og kamera kun til Cicero. Værktøjets vibration kommer igennem i lydløs. Oprydning i koden.
 - **0.1.41** – Knaprækken i bunden er gjort lav. Nyt punkt i menuen ⋮: "Tilpasninger af Cicero" slår app'ens ændringer af Ciceros udseende (swipe-faner, pinkode-kontakt, knaprække) til og fra på én gang.
 - **0.1.40** – Knaprækken Nulstil/Søg følger nu med i bunden af skærmen (hele bunden af søgekortet, med fast placering som reserve). Loggen siger, om knaprækken blev fundet.
